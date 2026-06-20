@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 
 use crate::types::{OrderId, Price, Qty, SeqNum, Side, Timestamp};
 
@@ -11,29 +11,57 @@ pub struct RestingOrder {
     pub timestamp: Timestamp,
 }
 
-#[derive(Debug, Default)]
-struct PriceLevel {
-    orders: VecDeque<RestingOrder>,
-    total_qty: Qty,
+#[derive(Clone, Copy, Debug)]
+struct Node {
+    order: RestingOrder,
+    prev: Option<u32>,
+    next: Option<u32>,
 }
 
-impl PriceLevel {
-    fn push(&mut self, order: RestingOrder) {
-        self.total_qty += order.qty;
-        self.orders.push_back(order);
+#[derive(Debug, Default)]
+struct Slab {
+    nodes: Vec<Node>,
+    free: Vec<u32>,
+}
+
+impl Slab {
+    fn alloc(&mut self, node: Node) -> u32 {
+        match self.free.pop() {
+            Some(slot) => {
+                self.nodes[slot as usize] = node;
+                slot
+            }
+            None => {
+                let slot = self.nodes.len() as u32;
+                self.nodes.push(node);
+                slot
+            }
+        }
     }
+
+    fn dealloc(&mut self, slot: u32) {
+        self.free.push(slot);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+struct PriceLevel {
+    head: Option<u32>,
+    tail: Option<u32>,
+    total_qty: Qty,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct Location {
     side: Side,
-    price: Price,
+    slot: u32,
 }
 
 #[derive(Debug, Default)]
 pub struct OrderBook {
     bids: BTreeMap<Price, PriceLevel>,
     asks: BTreeMap<Price, PriceLevel>,
+    slab: Slab,
     index: HashMap<OrderId, Location>,
 }
 
@@ -115,34 +143,36 @@ impl OrderBook {
     }
 
     pub fn insert(&mut self, side: Side, order: RestingOrder) {
-        self.index.insert(
-            order.id,
-            Location {
-                side,
-                price: order.price,
-            },
-        );
+        let slot = self.slab.alloc(Node {
+            order,
+            prev: None,
+            next: None,
+        });
+        self.index.insert(order.id, Location { side, slot });
         let book = match side {
             Side::Buy => &mut self.bids,
             Side::Sell => &mut self.asks,
         };
-        book.entry(order.price).or_default().push(order);
+        let level = book.entry(order.price).or_default();
+        level.total_qty += order.qty;
+        Self::link_back(&mut self.slab, level, slot);
     }
 
     pub fn cancel(&mut self, order_id: OrderId) -> Option<RestingOrder> {
         let location = self.index.remove(&order_id)?;
+        let order = self.slab.nodes[location.slot as usize].order;
         let book = match location.side {
             Side::Buy => &mut self.bids,
             Side::Sell => &mut self.asks,
         };
-        let level = book.get_mut(&location.price)?;
-        let position = level.orders.iter().position(|o| o.id == order_id)?;
-        let removed = level.orders.remove(position)?;
-        level.total_qty -= removed.qty;
-        if level.orders.is_empty() {
-            book.remove(&location.price);
+        let level = book.get_mut(&order.price)?;
+        level.total_qty -= order.qty;
+        Self::unlink(&mut self.slab, level, location.slot);
+        if level.head.is_none() {
+            book.remove(&order.price);
         }
-        Some(removed)
+        self.slab.dealloc(location.slot);
+        Some(order)
     }
 
     pub fn match_against<F>(
@@ -155,62 +185,86 @@ impl OrderBook {
     where
         F: FnMut(&RestingOrder, Qty, Price),
     {
-        let mut filled_ids: Vec<OrderId> = Vec::new();
-        {
+        while qty > 0 {
             let book = match taker_side {
                 Side::Buy => &mut self.asks,
                 Side::Sell => &mut self.bids,
             };
+            let best_price = match taker_side {
+                Side::Buy => book.keys().next().copied(),
+                Side::Sell => book.keys().next_back().copied(),
+            };
+            let Some(best_price) = best_price else {
+                break;
+            };
 
+            let crosses = match (taker_side, limit_price) {
+                (_, None) => true,
+                (Side::Buy, Some(limit)) => limit >= best_price,
+                (Side::Sell, Some(limit)) => limit <= best_price,
+            };
+            if !crosses {
+                break;
+            }
+
+            let level = book.get_mut(&best_price).expect("price level must exist");
             while qty > 0 {
-                let best_price = match taker_side {
-                    Side::Buy => book.keys().next().copied(),
-                    Side::Sell => book.keys().next_back().copied(),
-                };
-                let Some(best_price) = best_price else {
+                let Some(slot) = level.head else {
                     break;
                 };
-
-                let crosses = match (taker_side, limit_price) {
-                    (_, None) => true,
-                    (Side::Buy, Some(limit)) => limit >= best_price,
-                    (Side::Sell, Some(limit)) => limit <= best_price,
-                };
-                if !crosses {
-                    break;
-                }
-
-                let level = book.get_mut(&best_price).expect("price level must exist");
-                while qty > 0 {
-                    let Some(front) = level.orders.front_mut() else {
-                        break;
-                    };
-                    let traded = qty.min(front.qty);
-                    front.qty -= traded;
-                    level.total_qty -= traded;
-                    qty -= traded;
-
+                let (traded, fill, filled) = {
+                    let node = &mut self.slab.nodes[slot as usize];
+                    let traded = qty.min(node.order.qty);
+                    node.order.qty -= traded;
                     let fill = RestingOrder {
                         qty: traded,
-                        ..*front
+                        ..node.order
                     };
-                    on_trade(&fill, traded, best_price);
-
-                    if front.qty == 0 {
-                        let done = level.orders.pop_front().expect("front order exists");
-                        filled_ids.push(done.id);
-                    }
-                }
-
-                if level.orders.is_empty() {
-                    book.remove(&best_price);
+                    (traded, fill, node.order.qty == 0)
+                };
+                qty -= traded;
+                level.total_qty -= traded;
+                on_trade(&fill, traded, best_price);
+                if filled {
+                    self.index.remove(&fill.id);
+                    Self::unlink(&mut self.slab, level, slot);
+                    self.slab.dealloc(slot);
                 }
             }
-        }
 
-        for id in filled_ids {
-            self.index.remove(&id);
+            if level.head.is_none() {
+                book.remove(&best_price);
+            }
         }
         qty
+    }
+
+    fn link_back(slab: &mut Slab, level: &mut PriceLevel, slot: u32) {
+        let prev = level.tail;
+        {
+            let node = &mut slab.nodes[slot as usize];
+            node.prev = prev;
+            node.next = None;
+        }
+        match prev {
+            Some(p) => slab.nodes[p as usize].next = Some(slot),
+            None => level.head = Some(slot),
+        }
+        level.tail = Some(slot);
+    }
+
+    fn unlink(slab: &mut Slab, level: &mut PriceLevel, slot: u32) {
+        let (prev, next) = {
+            let node = &slab.nodes[slot as usize];
+            (node.prev, node.next)
+        };
+        match prev {
+            Some(p) => slab.nodes[p as usize].next = next,
+            None => level.head = next,
+        }
+        match next {
+            Some(n) => slab.nodes[n as usize].prev = prev,
+            None => level.tail = prev,
+        }
     }
 }
