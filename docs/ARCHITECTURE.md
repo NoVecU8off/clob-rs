@@ -39,7 +39,8 @@ let events: Vec<Event> = clob.submit(Command::New(NewOrder::limit(Side::Buy, 101
 Первый барьер. Проверяет корректность команды до того, как она дойдёт до движка:
 
 - `qty == 0` → `RejectReason::ZeroQuantity`;
-- лимитная заявка с `price == 0` → `RejectReason::InvalidPrice`;
+- нулевая цена → `RejectReason::InvalidPrice`: лимитная заявка с `price == 0`, стоп с
+  `trigger == 0`, стоп-лимит с `trigger == 0` или `price == 0`;
 - `Modify` с `qty == 0` или `price == 0` отклоняется по тем же правилам;
 - отмена проходит всегда (существование заявки проверяет движок).
 

@@ -17,7 +17,7 @@
 | Подсистема | Статус | Детали |
 | --- | --- | --- |
 | Входной API | ✅ | `Command::New` / `Command::Cancel` / `Command::Modify`, конструкторы `NewOrder::limit` / `market` / `stop` / `stop_limit`, `.with_tif()`, `ModifyOrder::new` |
-| **Gateway** | ✅ | Валидация: отказ при нулевом количестве и при нулевой цене лимитной заявки; те же проверки для `Modify` |
+| **Gateway** | ✅ | Валидация: отказ при нулевом количестве и нулевой цене — лимит (`price`), стоп/стоп-лимит (`trigger`), стоп-лимит (ещё и `price`); те же проверки для `Modify` |
 | **Sequencer** | ✅ | Монотонные `seq` и `order_id`; детерминированный порядок |
 | **Matching Engine** | ✅ | Сведение по price-time priority; market/limit; TIF `Gtc` / `Ioc` / `Fok` / `PostOnly`; amend (`Modify`); стоп/стоп-лимит с каскадной активацией |
 | **Order book** | ✅ | `BTreeMap` уровней по сторонам, интрузивный двусвязный FIFO-список внутри уровня (узлы в слабе-арене), `HashMap` индекс → отмена за `O(1)` |
