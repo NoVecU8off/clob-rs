@@ -124,6 +124,14 @@ impl OrderBook {
         }
     }
 
+    pub fn level_qty(&self, side: Side, price: Price) -> Qty {
+        let book = match side {
+            Side::Buy => &self.bids,
+            Side::Sell => &self.asks,
+        };
+        book.get(&price).map_or(0, |level| level.total_qty)
+    }
+
     pub fn available_qty(&self, taker_side: Side, limit_price: Option<Price>) -> Qty {
         let mut total: Qty = 0;
         match taker_side {

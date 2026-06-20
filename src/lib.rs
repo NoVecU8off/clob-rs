@@ -22,7 +22,7 @@ pub use engine::MatchingEngine;
 pub use error::RejectReason;
 pub use gateway::Gateway;
 pub use journal::JournalError;
-pub use marketdata::{L2Level, L2Snapshot, L3Order, L3Snapshot};
+pub use marketdata::{L2Feed, L2Level, L2Snapshot, L2Update, L3Order, L3Snapshot};
 pub use order::{CancelOrder, Command, ModifyOrder, NewOrder};
 pub use output::Event;
 pub use persist::PersistentClob;
