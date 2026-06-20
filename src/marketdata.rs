@@ -157,7 +157,7 @@ impl L2Feed {
             }
         }
         L2Update {
-            seq: events.first().map_or(0, event_seq),
+            seq: command_seq(events),
             bids: self.diff(book, Side::Buy, &bids),
             asks: self.diff(book, Side::Sell, &asks),
         }
@@ -187,6 +187,10 @@ impl L2Feed {
         }
         out
     }
+}
+
+pub(crate) fn command_seq(events: &[Event]) -> SeqNum {
+    events.first().map_or(0, event_seq)
 }
 
 fn event_seq(event: &Event) -> SeqNum {

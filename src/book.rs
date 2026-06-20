@@ -132,6 +132,23 @@ impl OrderBook {
         book.get(&price).map_or(0, |level| level.total_qty)
     }
 
+    pub fn level_orders(&self, side: Side, price: Price) -> Vec<(OrderId, Qty)> {
+        let book = match side {
+            Side::Buy => &self.bids,
+            Side::Sell => &self.asks,
+        };
+        let mut out = Vec::new();
+        if let Some(level) = book.get(&price) {
+            let mut cursor = level.head;
+            while let Some(slot) = cursor {
+                let node = self.slab.nodes[slot as usize];
+                out.push((node.order.id, node.order.qty));
+                cursor = node.next;
+            }
+        }
+        out
+    }
+
     pub fn available_qty(&self, taker_side: Side, limit_price: Option<Price>) -> Qty {
         let mut total: Qty = 0;
         match taker_side {
