@@ -12,6 +12,7 @@ mod persist;
 mod sequencer;
 mod snapshot;
 mod stops;
+mod tape;
 mod types;
 mod wal;
 
@@ -27,5 +28,6 @@ pub use order::{CancelOrder, Command, ModifyOrder, NewOrder};
 pub use output::Event;
 pub use persist::PersistentClob;
 pub use sequencer::Sequencer;
+pub use tape::{TapeTrade, TradeTape};
 pub use types::{OrderId, OrderType, Price, Qty, SeqNum, Side, TimeInForce, Timestamp};
 pub use wal::{Journal, read_commands};
