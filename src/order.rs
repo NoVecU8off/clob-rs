@@ -57,6 +57,16 @@ impl NewOrder {
         }
     }
 
+    pub fn iceberg(side: Side, price: Price, qty: Qty, display: Qty) -> Self {
+        NewOrder {
+            side,
+            order_type: OrderType::Iceberg { display },
+            price,
+            qty,
+            tif: TimeInForce::Gtc,
+        }
+    }
+
     pub fn with_tif(mut self, tif: TimeInForce) -> Self {
         self.tif = tif;
         self

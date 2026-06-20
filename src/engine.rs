@@ -13,6 +13,7 @@ struct Live {
     qty: Qty,
     tif: TimeInForce,
     timestamp: Timestamp,
+    display: Qty,
 }
 
 #[derive(Debug, Default)]
@@ -61,10 +62,11 @@ impl MatchingEngine {
                 });
                 self.drive_stops(seq, timestamp, out);
             }
-            OrderType::Limit | OrderType::Market => {
-                let limit_price = match order.order_type {
-                    OrderType::Limit => Some(order.price),
-                    _ => None,
+            OrderType::Limit | OrderType::Market | OrderType::Iceberg { .. } => {
+                let (limit_price, display) = match order.order_type {
+                    OrderType::Limit => (Some(order.price), 0),
+                    OrderType::Iceberg { display } => (Some(order.price), display),
+                    _ => (None, 0),
                 };
                 if let Err(reason) = self.precheck(order.side, limit_price, order.qty, order.tif) {
                     out.push(Event::Rejected { seq, reason });
@@ -80,6 +82,7 @@ impl MatchingEngine {
                         qty: order.qty,
                         tif: order.tif,
                         timestamp,
+                        display,
                     },
                     out,
                 );
@@ -119,6 +122,25 @@ impl MatchingEngine {
             order_id: modify.order_id,
         });
 
+        if let Some((display, _)) = self.book.reserve(modify.order_id) {
+            self.book.cancel(modify.order_id);
+            self.settle(
+                Live {
+                    seq,
+                    order_id: modify.order_id,
+                    side,
+                    limit_price: Some(modify.price),
+                    qty: modify.qty,
+                    tif: TimeInForce::Gtc,
+                    timestamp,
+                    display,
+                },
+                out,
+            );
+            self.drive_stops(seq, timestamp, out);
+            return;
+        }
+
         if modify.price == current.price && modify.qty <= current.qty {
             if modify.qty < current.qty {
                 self.book.reduce(modify.order_id, modify.qty);
@@ -142,6 +164,7 @@ impl MatchingEngine {
                 qty: modify.qty,
                 tif: TimeInForce::Gtc,
                 timestamp,
+                display: 0,
             },
             out,
         );
@@ -173,6 +196,7 @@ impl MatchingEngine {
             qty,
             tif,
             timestamp,
+            display,
         } = live;
 
         let mut last_px = None;
@@ -201,21 +225,29 @@ impl MatchingEngine {
         if let Some(price) = limit_price
             && matches!(tif, TimeInForce::Gtc | TimeInForce::PostOnly)
         {
+            let (visible, hidden) = if display > 0 && display < remaining {
+                (display, remaining - display)
+            } else {
+                (remaining, 0)
+            };
             self.book.insert(
                 side,
                 RestingOrder {
                     id: order_id,
                     seq,
                     price,
-                    qty: remaining,
+                    qty: visible,
                     timestamp,
                 },
             );
+            if hidden > 0 {
+                self.book.add_reserve(order_id, display, hidden);
+            }
             out.push(Event::Resting {
                 seq,
                 order_id,
                 price,
-                qty: remaining,
+                qty: visible,
             });
             return;
         }
@@ -249,6 +281,7 @@ impl MatchingEngine {
                     qty: stop.qty,
                     tif: stop.tif,
                     timestamp,
+                    display: 0,
                 },
                 out,
             );

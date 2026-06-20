@@ -57,12 +57,19 @@ struct Location {
     slot: u32,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct Reserve {
+    display: Qty,
+    hidden: Qty,
+}
+
 #[derive(Debug, Default)]
 pub struct OrderBook {
     bids: BTreeMap<Price, PriceLevel>,
     asks: BTreeMap<Price, PriceLevel>,
     slab: Slab,
     index: HashMap<OrderId, Location>,
+    reserves: HashMap<OrderId, Reserve>,
 }
 
 impl OrderBook {
@@ -166,6 +173,14 @@ impl OrderBook {
         Self::link_back(&mut self.slab, level, slot);
     }
 
+    pub fn add_reserve(&mut self, order_id: OrderId, display: Qty, hidden: Qty) {
+        self.reserves.insert(order_id, Reserve { display, hidden });
+    }
+
+    pub fn reserve(&self, order_id: OrderId) -> Option<(Qty, Qty)> {
+        self.reserves.get(&order_id).map(|r| (r.display, r.hidden))
+    }
+
     pub fn cancel(&mut self, order_id: OrderId) -> Option<RestingOrder> {
         let location = self.index.remove(&order_id)?;
         let order = self.slab.nodes[location.slot as usize].order;
@@ -180,6 +195,7 @@ impl OrderBook {
             book.remove(&order.price);
         }
         self.slab.dealloc(location.slot);
+        self.reserves.remove(&order_id);
         Some(order)
     }
 
@@ -260,9 +276,31 @@ impl OrderBook {
                 level.total_qty -= traded;
                 on_trade(&fill, traded, best_price);
                 if filled {
-                    self.index.remove(&fill.id);
-                    Self::unlink(&mut self.slab, level, slot);
-                    self.slab.dealloc(slot);
+                    let refill = if self.reserves.is_empty() {
+                        None
+                    } else if let Some(reserve) = self.reserves.get_mut(&fill.id) {
+                        let peak = reserve.display.min(reserve.hidden);
+                        reserve.hidden -= peak;
+                        if reserve.hidden == 0 {
+                            self.reserves.remove(&fill.id);
+                        }
+                        Some(peak)
+                    } else {
+                        None
+                    };
+                    match refill {
+                        Some(peak) => {
+                            self.slab.nodes[slot as usize].order.qty = peak;
+                            level.total_qty += peak;
+                            Self::unlink(&mut self.slab, level, slot);
+                            Self::link_back(&mut self.slab, level, slot);
+                        }
+                        None => {
+                            self.index.remove(&fill.id);
+                            Self::unlink(&mut self.slab, level, slot);
+                            self.slab.dealloc(slot);
+                        }
+                    }
                 }
             }
 

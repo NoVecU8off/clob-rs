@@ -39,6 +39,14 @@ impl Gateway {
                     return Err(RejectReason::InvalidPrice);
                 }
             }
+            OrderType::Iceberg { display } => {
+                if order.price == 0 {
+                    return Err(RejectReason::InvalidPrice);
+                }
+                if display == 0 {
+                    return Err(RejectReason::ZeroQuantity);
+                }
+            }
         }
         Ok(())
     }

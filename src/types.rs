@@ -25,6 +25,7 @@ pub enum OrderType {
     Market,
     Stop { trigger: Price },
     StopLimit { trigger: Price },
+    Iceberg { display: Qty },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]

@@ -48,4 +48,23 @@ fn main() {
     );
     println!("pending stops = {}", clob.pending_stops());
     println!("asks          = {:?}", clob.book().depth(Side::Sell, 5));
+
+    println!();
+    let mut iceberg = Clob::new();
+    print_events(
+        "iceberg sell 101 total x10, display x3 (only the peak is shown)",
+        &iceberg.submit(Command::New(NewOrder::iceberg(Side::Sell, 101, 10, 3))),
+    );
+    println!(
+        "asks (shows peak) = {:?}",
+        iceberg.book().depth(Side::Sell, 5)
+    );
+    print_events(
+        "buy 101 x3 -> takes the peak; hidden reserve refills it at the back",
+        &iceberg.submit(Command::New(NewOrder::limit(Side::Buy, 101, 3))),
+    );
+    println!(
+        "asks (refilled)   = {:?}",
+        iceberg.book().depth(Side::Sell, 5)
+    );
 }
