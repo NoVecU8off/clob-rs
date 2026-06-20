@@ -49,6 +49,10 @@ impl Clob {
         self.engine.book()
     }
 
+    pub fn pending_stops(&self) -> usize {
+        self.engine.pending_stops()
+    }
+
     pub fn current_seq(&self) -> u64 {
         self.sequencer.current_seq()
     }

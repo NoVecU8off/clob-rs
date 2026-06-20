@@ -6,6 +6,7 @@ mod gateway;
 mod order;
 mod output;
 mod sequencer;
+mod stops;
 mod types;
 
 pub use book::{OrderBook, RestingOrder};

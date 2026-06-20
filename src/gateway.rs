@@ -22,8 +22,23 @@ impl Gateway {
         if order.qty == 0 {
             return Err(RejectReason::ZeroQuantity);
         }
-        if order.order_type == OrderType::Limit && order.price == 0 {
-            return Err(RejectReason::InvalidPrice);
+        match order.order_type {
+            OrderType::Limit => {
+                if order.price == 0 {
+                    return Err(RejectReason::InvalidPrice);
+                }
+            }
+            OrderType::Market => {}
+            OrderType::Stop { trigger } => {
+                if trigger == 0 {
+                    return Err(RejectReason::InvalidPrice);
+                }
+            }
+            OrderType::StopLimit { trigger } => {
+                if trigger == 0 || order.price == 0 {
+                    return Err(RejectReason::InvalidPrice);
+                }
+            }
         }
         Ok(())
     }

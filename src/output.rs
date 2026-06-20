@@ -37,4 +37,8 @@ pub enum Event {
         seq: SeqNum,
         order_id: OrderId,
     },
+    Triggered {
+        seq: SeqNum,
+        order_id: OrderId,
+    },
 }

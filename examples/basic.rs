@@ -35,4 +35,17 @@ fn main() {
     println!("spread   = {:?}", book.spread());
     println!("asks     = {:?}", book.depth(Side::Sell, 5));
     println!("bids     = {:?}", book.depth(Side::Buy, 5));
+
+    println!();
+    print_events(
+        "buy-stop trigger 102 x4 (parks; becomes market on trigger)",
+        &clob.submit(Command::New(NewOrder::stop(Side::Buy, 102, 4))),
+    );
+    println!("pending stops = {}", clob.pending_stops());
+    print_events(
+        "buy 102 x1 -> prints @102 and triggers the stop",
+        &clob.submit(Command::New(NewOrder::limit(Side::Buy, 102, 1))),
+    );
+    println!("pending stops = {}", clob.pending_stops());
+    println!("asks          = {:?}", clob.book().depth(Side::Sell, 5));
 }

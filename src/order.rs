@@ -37,6 +37,26 @@ impl NewOrder {
         }
     }
 
+    pub fn stop(side: Side, trigger: Price, qty: Qty) -> Self {
+        NewOrder {
+            side,
+            order_type: OrderType::Stop { trigger },
+            price: 0,
+            qty,
+            tif: TimeInForce::Ioc,
+        }
+    }
+
+    pub fn stop_limit(side: Side, trigger: Price, limit: Price, qty: Qty) -> Self {
+        NewOrder {
+            side,
+            order_type: OrderType::StopLimit { trigger },
+            price: limit,
+            qty,
+            tif: TimeInForce::Gtc,
+        }
+    }
+
     pub fn with_tif(mut self, tif: TimeInForce) -> Self {
         self.tif = tif;
         self

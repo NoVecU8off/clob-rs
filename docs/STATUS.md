@@ -7,7 +7,7 @@
 ## Кратко
 
 - Качество: проходит весь done-gate — `cargo build --all-targets`, `cargo clippy -- -D warnings`, `cargo fmt --check` без замечаний.
-- Тесты: **42 интеграционных теста** проходят (`cargo test`) — матчинг/TIF/market/post-only ([matching.rs](../tests/matching.rs)), amend ([modify.rs](../tests/modify.rs)), отмена и интрузивный список ([cancel.rs](../tests/cancel.rs)), аксессоры книги и детерминизм ([book.rs](../tests/book.rs)); общие хелперы в [tests/common](../tests/common/mod.rs).
+- Тесты: **55 интеграционных тестов** проходят (`cargo test`) — матчинг/TIF/market/post-only ([matching.rs](../tests/matching.rs)), amend ([modify.rs](../tests/modify.rs)), стоп/стоп-лимит и каскад ([stops.rs](../tests/stops.rs)), отмена и интрузивный список ([cancel.rs](../tests/cancel.rs)), аксессоры книги и детерминизм ([book.rs](../tests/book.rs)); общие хелперы в [tests/common](../tests/common/mod.rs).
 - Зависимости: **нет** — только `std`.
 - Производительность: **~31 млн заявок/с** на синтетическом бенчмарке (release, один поток, `cargo run --release --example throughput`). Цифра зависит от железа и сценария, носит ориентировочный характер.
 - Редакция Rust: 2024.
@@ -16,18 +16,19 @@
 
 | Подсистема | Статус | Детали |
 | --- | --- | --- |
-| Входной API | ✅ | `Command::New` / `Command::Cancel` / `Command::Modify`, конструкторы `NewOrder::limit` / `NewOrder::market`, `.with_tif()`, `ModifyOrder::new` |
+| Входной API | ✅ | `Command::New` / `Command::Cancel` / `Command::Modify`, конструкторы `NewOrder::limit` / `market` / `stop` / `stop_limit`, `.with_tif()`, `ModifyOrder::new` |
 | **Gateway** | ✅ | Валидация: отказ при нулевом количестве и при нулевой цене лимитной заявки; те же проверки для `Modify` |
 | **Sequencer** | ✅ | Монотонные `seq` и `order_id`; детерминированный порядок |
-| **Matching Engine** | ✅ | Сведение по price-time priority; market/limit; TIF `Gtc` / `Ioc` / `Fok` / `PostOnly`; amend (`Modify`) |
+| **Matching Engine** | ✅ | Сведение по price-time priority; market/limit; TIF `Gtc` / `Ioc` / `Fok` / `PostOnly`; amend (`Modify`); стоп/стоп-лимит с каскадной активацией |
 | **Order book** | ✅ | `BTreeMap` уровней по сторонам, интрузивный двусвязный FIFO-список внутри уровня (узлы в слабе-арене), `HashMap` индекс → отмена за `O(1)` |
-| **Output** | ✅ | События `Accepted`, `Trade`, `Resting`, `Filled`, `Canceled`, `Modified`, `Rejected` |
+| **Книга стопов** | ✅ | Спящие стоп-заявки вне основной книги; активация по цене последней сделки; `Clob::pending_stops()` |
+| **Output** | ✅ | События `Accepted`, `Trade`, `Resting`, `Filled`, `Canceled`, `Modified`, `Triggered`, `Rejected` |
 | Market data | ⚠️ частично | Снимок глубины `depth()`, `best_bid` / `best_ask` / `spread`; нет инкрементальных обновлений |
 | Примеры | ✅ | `examples/basic.rs`, `examples/throughput.rs` |
 
 ## Типы заявок и time-in-force
 
-- Типы: `Limit`, `Market`.
+- Типы: `Limit`, `Market`, `Stop` (стоп-маркет), `StopLimit` (стоп-лимит).
 - Time-in-force: `Gtc` (встаёт в книгу), `Ioc` (исполнить сейчас, остаток отменить), `Fok` (исполнить целиком или отклонить), `PostOnly` (только мейкер: отклонить с `WouldCross`, если немедленно пересекла бы спред).
 
 ## Изменение заявок (amend)
@@ -36,8 +37,17 @@
 - Уменьшение количества при той же цене сохраняет приоритет (правка на месте, `O(1)`).
 - Смена цены или увеличение количества — потеря приоритета: заявка снимается и заново сводится (при пересечении спреда исполняется).
 
+## Стоп-заявки
+
+- `Stop` (стоп-маркет) и `StopLimit` (стоп-лимит) «спят» в отдельной книге вне основной и не видны в `depth()` / `len()`; их число — в `Clob::pending_stops()`.
+- Триггер — **цена последней сделки**: buy-stop активируется при `last >= trigger`, sell-stop — при `last <= trigger`. Если рынок уже за триггером, стоп срабатывает сразу при приёме.
+- При срабатывании эмитится `Triggered`, затем заявка проходит обычное сведение: `Stop` — как рыночная, `StopLimit` — как лимит по своей цене с учётом TIF (вкл. предпроверки `Fok` / `PostOnly` на момент активации).
+- Активация **каскадная**: сделки сработавшего стопа двигают цену и могут активировать следующие стопы (порядок — по времени приёма). Каскад детерминирован и конечен.
+- `Cancel` снимает спящий стоп; `Modify` спящего стопа пока не поддерживается.
+
 ## Известные ограничения
 
+- **Стопы триггерятся по цене последней сделки** (не по котировкам); спящие стопы не отражаются в глубине/`len()`; amend спящего стопа не поддерживается.
 - **Нет владельца/счёта** у заявки → невозможна защита от самосведения (self-trade prevention).
 - **Нет персистентности и реплея** — состояние только в памяти.
 - **Нет сети** — библиотека встраиваемая, без шлюза.

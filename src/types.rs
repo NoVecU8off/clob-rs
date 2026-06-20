@@ -23,6 +23,8 @@ impl Side {
 pub enum OrderType {
     Limit,
     Market,
+    Stop { trigger: Price },
+    StopLimit { trigger: Price },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]

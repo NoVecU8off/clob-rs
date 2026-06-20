@@ -2,11 +2,24 @@ use crate::book::{OrderBook, RestingOrder};
 use crate::error::RejectReason;
 use crate::order::{ModifyOrder, NewOrder};
 use crate::output::Event;
-use crate::types::{OrderId, OrderType, SeqNum, TimeInForce, Timestamp};
+use crate::stops::{PendingStop, StopBook};
+use crate::types::{OrderId, OrderType, Price, Qty, SeqNum, Side, TimeInForce, Timestamp};
+
+struct Live {
+    seq: SeqNum,
+    order_id: OrderId,
+    side: Side,
+    limit_price: Option<Price>,
+    qty: Qty,
+    tif: TimeInForce,
+    timestamp: Timestamp,
+}
 
 #[derive(Debug, Default)]
 pub struct MatchingEngine {
     book: OrderBook,
+    stops: StopBook,
+    last_trade_price: Option<Price>,
 }
 
 impl MatchingEngine {
@@ -18,6 +31,10 @@ impl MatchingEngine {
         &self.book
     }
 
+    pub fn pending_stops(&self) -> usize {
+        self.stops.len()
+    }
+
     pub(crate) fn execute_new(
         &mut self,
         seq: SeqNum,
@@ -26,84 +43,59 @@ impl MatchingEngine {
         timestamp: Timestamp,
         out: &mut Vec<Event>,
     ) {
-        let limit_price = match order.order_type {
-            OrderType::Limit => Some(order.price),
-            OrderType::Market => None,
-        };
-
-        if order.tif == TimeInForce::Fok
-            && self.book.available_qty(order.side, limit_price) < order.qty
-        {
-            out.push(Event::Rejected {
-                seq,
-                reason: RejectReason::InsufficientLiquidity,
-            });
-            return;
-        }
-
-        if order.tif == TimeInForce::PostOnly && self.book.would_cross(order.side, limit_price) {
-            out.push(Event::Rejected {
-                seq,
-                reason: RejectReason::WouldCross,
-            });
-            return;
-        }
-
-        out.push(Event::Accepted { seq, order_id });
-
-        let taker_side = order.side;
-        let remaining = self.book.match_against(
-            taker_side,
-            limit_price,
-            order.qty,
-            |maker, traded, price| {
-                out.push(Event::Trade {
-                    seq,
-                    taker_order_id: order_id,
-                    maker_order_id: maker.id,
-                    price,
-                    qty: traded,
-                    taker_side,
-                });
-            },
-        );
-
-        if remaining == 0 {
-            out.push(Event::Filled { seq, order_id });
-            return;
-        }
-
-        let rest_on_book = order.order_type == OrderType::Limit
-            && matches!(order.tif, TimeInForce::Gtc | TimeInForce::PostOnly);
-        if rest_on_book {
-            self.book.insert(
-                taker_side,
-                RestingOrder {
+        match order.order_type {
+            OrderType::Stop { trigger } | OrderType::StopLimit { trigger } => {
+                out.push(Event::Accepted { seq, order_id });
+                let (activates_to, limit_price) = match order.order_type {
+                    OrderType::StopLimit { .. } => (OrderType::Limit, order.price),
+                    _ => (OrderType::Market, 0),
+                };
+                self.stops.park(PendingStop {
                     id: order_id,
-                    seq,
-                    price: order.price,
-                    qty: remaining,
-                    timestamp,
-                },
-            );
-            out.push(Event::Resting {
-                seq,
-                order_id,
-                price: order.price,
-                qty: remaining,
-            });
-        } else {
-            out.push(Event::Canceled { seq, order_id });
+                    side: order.side,
+                    trigger,
+                    activates_to,
+                    limit_price,
+                    qty: order.qty,
+                    tif: order.tif,
+                });
+                self.drive_stops(seq, timestamp, out);
+            }
+            OrderType::Limit | OrderType::Market => {
+                let limit_price = match order.order_type {
+                    OrderType::Limit => Some(order.price),
+                    _ => None,
+                };
+                if let Err(reason) = self.precheck(order.side, limit_price, order.qty, order.tif) {
+                    out.push(Event::Rejected { seq, reason });
+                    return;
+                }
+                out.push(Event::Accepted { seq, order_id });
+                self.settle(
+                    Live {
+                        seq,
+                        order_id,
+                        side: order.side,
+                        limit_price,
+                        qty: order.qty,
+                        tif: order.tif,
+                        timestamp,
+                    },
+                    out,
+                );
+                self.drive_stops(seq, timestamp, out);
+            }
         }
     }
 
     pub(crate) fn execute_cancel(&mut self, seq: SeqNum, order_id: OrderId, out: &mut Vec<Event>) {
-        match self.book.cancel(order_id) {
-            Some(_) => out.push(Event::Canceled { seq, order_id }),
-            None => out.push(Event::Rejected {
+        if self.book.cancel(order_id).is_some() || self.stops.cancel(order_id).is_some() {
+            out.push(Event::Canceled { seq, order_id });
+        } else {
+            out.push(Event::Rejected {
                 seq,
                 reason: RejectReason::UnknownOrder,
-            }),
+            });
         }
     }
 
@@ -141,13 +133,52 @@ impl MatchingEngine {
         }
 
         self.book.cancel(modify.order_id);
+        self.settle(
+            Live {
+                seq,
+                order_id: modify.order_id,
+                side,
+                limit_price: Some(modify.price),
+                qty: modify.qty,
+                tif: TimeInForce::Gtc,
+                timestamp,
+            },
+            out,
+        );
+        self.drive_stops(seq, timestamp, out);
+    }
 
-        let order_id = modify.order_id;
-        let remaining = self.book.match_against(
+    fn precheck(
+        &self,
+        side: Side,
+        limit_price: Option<Price>,
+        qty: Qty,
+        tif: TimeInForce,
+    ) -> Result<(), RejectReason> {
+        if tif == TimeInForce::Fok && self.book.available_qty(side, limit_price) < qty {
+            return Err(RejectReason::InsufficientLiquidity);
+        }
+        if tif == TimeInForce::PostOnly && self.book.would_cross(side, limit_price) {
+            return Err(RejectReason::WouldCross);
+        }
+        Ok(())
+    }
+
+    fn settle(&mut self, live: Live, out: &mut Vec<Event>) {
+        let Live {
+            seq,
+            order_id,
             side,
-            Some(modify.price),
-            modify.qty,
-            |maker, traded, price| {
+            limit_price,
+            qty,
+            tif,
+            timestamp,
+        } = live;
+
+        let mut last_px = None;
+        let remaining = self
+            .book
+            .match_against(side, limit_price, qty, |maker, traded, price| {
                 out.push(Event::Trade {
                     seq,
                     taker_order_id: order_id,
@@ -156,29 +187,71 @@ impl MatchingEngine {
                     qty: traded,
                     taker_side: side,
                 });
-            },
-        );
+                last_px = Some(price);
+            });
+        if let Some(price) = last_px {
+            self.last_trade_price = Some(price);
+        }
 
         if remaining == 0 {
             out.push(Event::Filled { seq, order_id });
             return;
         }
 
-        self.book.insert(
-            side,
-            RestingOrder {
-                id: order_id,
+        if let Some(price) = limit_price
+            && matches!(tif, TimeInForce::Gtc | TimeInForce::PostOnly)
+        {
+            self.book.insert(
+                side,
+                RestingOrder {
+                    id: order_id,
+                    seq,
+                    price,
+                    qty: remaining,
+                    timestamp,
+                },
+            );
+            out.push(Event::Resting {
                 seq,
-                price: modify.price,
+                order_id,
+                price,
                 qty: remaining,
-                timestamp,
-            },
-        );
-        out.push(Event::Resting {
-            seq,
-            order_id,
-            price: modify.price,
-            qty: remaining,
-        });
+            });
+            return;
+        }
+
+        out.push(Event::Canceled { seq, order_id });
+    }
+
+    fn drive_stops(&mut self, seq: SeqNum, timestamp: Timestamp, out: &mut Vec<Event>) {
+        while let Some(last) = self.last_trade_price {
+            let Some(stop) = self.stops.take_triggered(last) else {
+                break;
+            };
+            out.push(Event::Triggered {
+                seq,
+                order_id: stop.id,
+            });
+            let limit_price = match stop.activates_to {
+                OrderType::Limit => Some(stop.limit_price),
+                _ => None,
+            };
+            if let Err(reason) = self.precheck(stop.side, limit_price, stop.qty, stop.tif) {
+                out.push(Event::Rejected { seq, reason });
+                continue;
+            }
+            self.settle(
+                Live {
+                    seq,
+                    order_id: stop.id,
+                    side: stop.side,
+                    limit_price,
+                    qty: stop.qty,
+                    tif: stop.tif,
+                    timestamp,
+                },
+                out,
+            );
+        }
     }
 }
