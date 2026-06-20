@@ -1,69 +1,13 @@
 use std::fs::OpenOptions;
-use std::path::{Path, PathBuf};
 
 use clob::{
-    CancelOrder, Clob, Command, Journal, JournalError, ModifyOrder, NewOrder, OrderBook,
-    PersistentClob, Side, TimeInForce, read_commands,
+    CancelOrder, Clob, Command, Journal, JournalError, ModifyOrder, NewOrder, PersistentClob, Side,
+    TimeInForce, read_commands,
 };
 
-struct TempFile(PathBuf);
+mod common;
 
-impl TempFile {
-    fn new(name: &str) -> Self {
-        let mut path = std::env::temp_dir();
-        path.push(format!("clob_persist_{}_{}.wal", std::process::id(), name));
-        let _ = std::fs::remove_file(&path);
-        TempFile(path)
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempFile {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.0);
-    }
-}
-
-type State = (
-    Option<u64>,
-    Option<u64>,
-    Vec<(u64, u64)>,
-    Vec<(u64, u64)>,
-    usize,
-    usize,
-    u64,
-);
-
-fn capture(book: &OrderBook, pending: usize, seq: u64) -> State {
-    (
-        book.best_bid(),
-        book.best_ask(),
-        book.depth(Side::Buy, 64),
-        book.depth(Side::Sell, 64),
-        book.len(),
-        pending,
-        seq,
-    )
-}
-
-fn script() -> Vec<Command> {
-    vec![
-        Command::New(NewOrder::limit(Side::Sell, 101, 10)),
-        Command::New(NewOrder::limit(Side::Sell, 102, 5)),
-        Command::New(NewOrder::limit(Side::Buy, 100, 7)),
-        Command::New(NewOrder::limit(Side::Buy, 101, 12)),
-        Command::New(NewOrder::limit(Side::Buy, 100, 0)),
-        Command::Cancel(CancelOrder { order_id: 2 }),
-        Command::New(NewOrder::iceberg(Side::Sell, 105, 20, 5)),
-        Command::New(NewOrder::limit(Side::Buy, 105, 7)),
-        Command::New(NewOrder::stop(Side::Buy, 200, 5)),
-        Command::Modify(ModifyOrder::new(4, 99, 2)),
-        Command::New(NewOrder::limit(Side::Sell, 100, 1).with_tif(TimeInForce::Ioc)),
-    ]
-}
+use common::{TempFile, capture, script};
 
 #[test]
 fn command_round_trip_covers_all_shapes() {

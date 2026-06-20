@@ -19,6 +19,7 @@ pub enum JournalError {
     UnknownCommand(u8),
     UnknownOrderType(u8),
     UnknownTif(u8),
+    CorruptSnapshot,
 }
 
 impl From<std::io::Error> for JournalError {
@@ -156,7 +157,7 @@ fn type_code(order_type: OrderType) -> u8 {
     }
 }
 
-fn tif_code(tif: TimeInForce) -> u8 {
+pub(crate) fn tif_code(tif: TimeInForce) -> u8 {
     match tif {
         TimeInForce::Gtc => 0,
         TimeInForce::Ioc => 1,
@@ -165,7 +166,7 @@ fn tif_code(tif: TimeInForce) -> u8 {
     }
 }
 
-fn decode_tif(code: u8) -> Result<TimeInForce, JournalError> {
+pub(crate) fn decode_tif(code: u8) -> Result<TimeInForce, JournalError> {
     match code {
         0 => Ok(TimeInForce::Gtc),
         1 => Ok(TimeInForce::Ioc),

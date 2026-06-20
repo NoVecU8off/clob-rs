@@ -1,4 +1,4 @@
-use crate::book::{OrderBook, RestingOrder};
+use crate::book::{OrderBook, RestingEntry, RestingOrder};
 use crate::error::RejectReason;
 use crate::order::{ModifyOrder, NewOrder};
 use crate::output::Event;
@@ -34,6 +34,39 @@ impl MatchingEngine {
 
     pub fn pending_stops(&self) -> usize {
         self.stops.len()
+    }
+
+    pub(crate) fn last_trade_price(&self) -> Option<Price> {
+        self.last_trade_price
+    }
+
+    pub(crate) fn resting_orders(&self) -> Vec<RestingEntry> {
+        self.book.resting_orders()
+    }
+
+    pub(crate) fn pending_stops_data(&self) -> Vec<PendingStop> {
+        self.stops.pending().to_vec()
+    }
+
+    pub(crate) fn restore_last_trade_price(&mut self, price: Option<Price>) {
+        self.last_trade_price = price;
+    }
+
+    pub(crate) fn restore_order(
+        &mut self,
+        side: Side,
+        order: RestingOrder,
+        reserve: Option<(Qty, Qty)>,
+    ) {
+        let id = order.id;
+        self.book.insert(side, order);
+        if let Some((display, hidden)) = reserve {
+            self.book.add_reserve(id, display, hidden);
+        }
+    }
+
+    pub(crate) fn restore_stop(&mut self, stop: PendingStop) {
+        self.stops.park(stop);
     }
 
     pub(crate) fn execute_new(

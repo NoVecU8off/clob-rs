@@ -30,6 +30,10 @@ impl StopBook {
         self.pending.len()
     }
 
+    pub(crate) fn pending(&self) -> &[PendingStop] {
+        &self.pending
+    }
+
     pub(crate) fn park(&mut self, stop: PendingStop) {
         self.pending.push(stop);
     }

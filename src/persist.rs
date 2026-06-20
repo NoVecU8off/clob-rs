@@ -1,29 +1,46 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::book::OrderBook;
 use crate::clob::Clob;
 use crate::journal::JournalError;
 use crate::order::Command;
 use crate::output::Event;
-use crate::wal::{Journal, read_commands};
+use crate::snapshot;
+use crate::wal::{Journal, read_segment};
 
 #[derive(Debug)]
 pub struct PersistentClob {
     clob: Clob,
     journal: Journal,
+    snapshot_path: PathBuf,
 }
 
 impl PersistentClob {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, JournalError> {
         let path = path.as_ref();
-        let mut clob = Clob::new();
+        let snapshot_path = snapshot_path(path);
+        let (mut clob, applied) = match snapshot::read(&snapshot_path)? {
+            Some(clob) => {
+                let applied = clob.current_seq();
+                (clob, applied)
+            }
+            None => (Clob::new(), 0),
+        };
+        let (base_seq, commands) = read_segment(path)?;
         let mut scratch = Vec::new();
-        for command in read_commands(path)? {
-            scratch.clear();
-            clob.submit_into(command, &mut scratch);
+        for (offset, command) in commands.into_iter().enumerate() {
+            let seq = base_seq + offset as u64 + 1;
+            if seq > applied {
+                scratch.clear();
+                clob.submit_into(command, &mut scratch);
+            }
         }
-        let journal = Journal::open(path)?;
-        Ok(PersistentClob { clob, journal })
+        let journal = Journal::open_base(path, applied)?;
+        Ok(PersistentClob {
+            clob,
+            journal,
+            snapshot_path,
+        })
     }
 
     pub fn submit(&mut self, command: Command) -> Result<Vec<Event>, JournalError> {
@@ -55,6 +72,14 @@ impl PersistentClob {
         Ok(out)
     }
 
+    pub fn checkpoint(&mut self) -> Result<(), JournalError> {
+        self.journal.commit()?;
+        let base_seq = self.clob.current_seq();
+        snapshot::write(&self.snapshot_path, &self.clob)?;
+        self.journal.rotate(base_seq)?;
+        Ok(())
+    }
+
     pub fn flush(&mut self) -> Result<(), JournalError> {
         self.journal.commit()
     }
@@ -74,4 +99,10 @@ impl PersistentClob {
     pub fn pending_stops(&self) -> usize {
         self.clob.pending_stops()
     }
+}
+
+fn snapshot_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".snap");
+    PathBuf::from(name)
 }

@@ -11,6 +11,8 @@ pub struct RestingOrder {
     pub timestamp: Timestamp,
 }
 
+pub(crate) type RestingEntry = (Side, RestingOrder, Option<(Qty, Qty)>);
+
 #[derive(Clone, Copy, Debug)]
 struct Node {
     order: RestingOrder,
@@ -179,6 +181,21 @@ impl OrderBook {
 
     pub fn reserve(&self, order_id: OrderId) -> Option<(Qty, Qty)> {
         self.reserves.get(&order_id).map(|r| (r.display, r.hidden))
+    }
+
+    pub(crate) fn resting_orders(&self) -> Vec<RestingEntry> {
+        let mut out = Vec::with_capacity(self.index.len());
+        for (side, levels) in [(Side::Buy, &self.bids), (Side::Sell, &self.asks)] {
+            for level in levels.values() {
+                let mut cursor = level.head;
+                while let Some(slot) = cursor {
+                    let node = self.slab.nodes[slot as usize];
+                    out.push((side, node.order, self.reserve(node.order.id)));
+                    cursor = node.next;
+                }
+            }
+        }
+        out
     }
 
     pub fn cancel(&mut self, order_id: OrderId) -> Option<RestingOrder> {

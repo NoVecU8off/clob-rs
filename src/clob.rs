@@ -4,6 +4,7 @@ use crate::gateway::Gateway;
 use crate::order::Command;
 use crate::output::Event;
 use crate::sequencer::Sequencer;
+use crate::snapshot::SnapshotState;
 
 #[derive(Debug, Default)]
 pub struct Clob {
@@ -55,5 +56,32 @@ impl Clob {
 
     pub fn current_seq(&self) -> u64 {
         self.sequencer.current_seq()
+    }
+
+    pub(crate) fn capture(&self) -> SnapshotState {
+        let (seq, next_order_id) = self.sequencer.snapshot();
+        SnapshotState {
+            seq,
+            next_order_id,
+            last_trade_price: self.engine.last_trade_price(),
+            orders: self.engine.resting_orders(),
+            stops: self.engine.pending_stops_data(),
+        }
+    }
+
+    pub(crate) fn from_snapshot(state: SnapshotState) -> Self {
+        let mut engine = MatchingEngine::new();
+        engine.restore_last_trade_price(state.last_trade_price);
+        for (side, order, reserve) in state.orders {
+            engine.restore_order(side, order, reserve);
+        }
+        for stop in state.stops {
+            engine.restore_stop(stop);
+        }
+        Clob {
+            gateway: Gateway::new(),
+            sequencer: Sequencer::restore(state.seq, state.next_order_id),
+            engine,
+        }
     }
 }

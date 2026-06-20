@@ -9,6 +9,7 @@ mod order;
 mod output;
 mod persist;
 mod sequencer;
+mod snapshot;
 mod stops;
 mod types;
 mod wal;

@@ -1,4 +1,4 @@
-use clob::{Command, NewOrder, PersistentClob, Side};
+use clob::{Command, NewOrder, PersistentClob, Side, read_commands};
 
 fn print_book(label: &str, clob: &PersistentClob) {
     let book = clob.book();
@@ -27,6 +27,10 @@ fn main() {
             .expect("submit");
         clob.submit(Command::New(NewOrder::limit(Side::Buy, 101, 4)))
             .expect("submit");
+
+        clob.checkpoint().expect("checkpoint");
+        println!("--- checkpoint written; the journal is truncated to its tail ---\n");
+
         clob.submit(Command::New(NewOrder::iceberg(Side::Sell, 103, 30, 5)))
             .expect("submit");
         clob.submit(Command::New(NewOrder::stop(Side::Buy, 110, 5)))
@@ -34,10 +38,11 @@ fn main() {
         print_book("session 1 (live)", &clob);
     }
 
-    println!("\n--- process restarts; book is only in the journal on disk ---\n");
+    let tail = read_commands(&path).expect("read journal").len();
+    println!("\n--- process restarts; recovery = snapshot + {tail} journal commands ---\n");
 
     let mut clob = PersistentClob::open(&path).expect("recover journal");
-    print_book("session 2 (recovered by replaying the journal)", &clob);
+    print_book("session 2 (recovered from snapshot + journal tail)", &clob);
 
     println!();
     clob.submit(Command::New(NewOrder::limit(Side::Buy, 100, 2)))
@@ -45,4 +50,5 @@ fn main() {
     print_book("session 2 continues writing seamlessly", &clob);
 
     let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(format!("{}.snap", path.display()));
 }
