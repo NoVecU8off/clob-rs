@@ -1,0 +1,15 @@
+[package]
+name = "clob"
+version = "0.1.0"
+edition = "2024"
+description = "A deterministic central limit order book (CLOB) matching engine with a gateway -> sequencer -> engine -> output pipeline."
+license = "MIT OR Apache-2.0"
+keywords = ["clob", "order-book", "matching-engine", "trading", "exchange"]
+categories = ["data-structures", "algorithms"]
+
+[dependencies]
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
