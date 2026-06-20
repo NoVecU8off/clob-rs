@@ -4,6 +4,7 @@ use crate::types::{OrderId, OrderType, Price, Qty, Side, TimeInForce};
 pub enum Command {
     New(NewOrder),
     Cancel(CancelOrder),
+    Modify(ModifyOrder),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,6 +48,23 @@ pub struct CancelOrder {
     pub order_id: OrderId,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModifyOrder {
+    pub order_id: OrderId,
+    pub price: Price,
+    pub qty: Qty,
+}
+
+impl ModifyOrder {
+    pub fn new(order_id: OrderId, price: Price, qty: Qty) -> Self {
+        ModifyOrder {
+            order_id,
+            price,
+            qty,
+        }
+    }
+}
+
 impl From<NewOrder> for Command {
     fn from(order: NewOrder) -> Self {
         Command::New(order)
@@ -56,5 +74,11 @@ impl From<NewOrder> for Command {
 impl From<CancelOrder> for Command {
     fn from(cancel: CancelOrder) -> Self {
         Command::Cancel(cancel)
+    }
+}
+
+impl From<ModifyOrder> for Command {
+    fn from(modify: ModifyOrder) -> Self {
+        Command::Modify(modify)
     }
 }

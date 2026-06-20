@@ -40,6 +40,7 @@ let events: Vec<Event> = clob.submit(Command::New(NewOrder::limit(Side::Buy, 101
 
 - `qty == 0` → `RejectReason::ZeroQuantity`;
 - лимитная заявка с `price == 0` → `RejectReason::InvalidPrice`;
+- `Modify` с `qty == 0` или `price == 0` отклоняется по тем же правилам;
 - отмена проходит всегда (существование заявки проверяет движок).
 
 Сюда же логично добавлять правила инструмента (размер тика/лота, ценовые коридоры,
@@ -67,6 +68,13 @@ pre-trade risk) — структура без полей оставлена ра
 Отмена: `execute_cancel` снимает заявку из книги (`Canceled`) либо отклоняет
 несуществующую (`UnknownOrder`).
 
+Изменение (amend): `execute_modify` находит стоящую заявку (иначе `UnknownOrder`) и
+эмитит `Modified`. Уменьшение количества при той же цене — правка на месте за `O(1)`
+с сохранением приоритета (далее `Resting` с новым объёмом). Смена цены или увеличение
+количества — потеря приоритета: заявка снимается и с тем же `order_id` заново проходит
+сведение (при пересечении спреда — `Trade`, затем `Filled` или `Resting`). Так книга
+после amend остаётся нескрещённой.
+
 ### Output — [src/output.rs](../src/output.rs)
 
 Единый перечень событий `Event`:
@@ -78,6 +86,7 @@ pre-trade risk) — структура без полей оставлена ра
 | `Resting` | остаток встал в книгу |
 | `Filled` | заявка исполнена полностью |
 | `Canceled` | заявка/остаток снят |
+| `Modified` | заявка изменена (amend); далее идут события исхода |
 | `Rejected` | отказ (gateway или нехватка ликвидности для FOK) |
 
 ## Структура ордербука — [src/book.rs](../src/book.rs)
@@ -181,7 +190,7 @@ price-time. Полностью исполненный мейкер тут же �
 | Модуль | Содержимое |
 | --- | --- |
 | [src/types.rs](../src/types.rs) | примитивы: `OrderId`, `Price`, `Qty`, `Side`, `OrderType`, `TimeInForce` |
-| [src/order.rs](../src/order.rs) | входной API: `Command`, `NewOrder`, `CancelOrder` |
+| [src/order.rs](../src/order.rs) | входной API: `Command`, `NewOrder`, `CancelOrder`, `ModifyOrder` |
 | [src/gateway.rs](../src/gateway.rs) | стадия Gateway |
 | [src/sequencer.rs](../src/sequencer.rs) | стадия Sequencer |
 | [src/book.rs](../src/book.rs) | ордербук и алгоритм сведения |

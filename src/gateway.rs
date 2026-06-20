@@ -1,5 +1,5 @@
 use crate::error::RejectReason;
-use crate::order::{Command, NewOrder};
+use crate::order::{Command, ModifyOrder, NewOrder};
 use crate::types::OrderType;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -14,6 +14,7 @@ impl Gateway {
         match command {
             Command::New(order) => self.validate_new(order),
             Command::Cancel(_) => Ok(()),
+            Command::Modify(modify) => self.validate_modify(modify),
         }
     }
 
@@ -22,6 +23,16 @@ impl Gateway {
             return Err(RejectReason::ZeroQuantity);
         }
         if order.order_type == OrderType::Limit && order.price == 0 {
+            return Err(RejectReason::InvalidPrice);
+        }
+        Ok(())
+    }
+
+    fn validate_modify(&self, modify: &ModifyOrder) -> Result<(), RejectReason> {
+        if modify.qty == 0 {
+            return Err(RejectReason::ZeroQuantity);
+        }
+        if modify.price == 0 {
             return Err(RejectReason::InvalidPrice);
         }
         Ok(())

@@ -1,6 +1,6 @@
 use crate::book::{OrderBook, RestingOrder};
 use crate::error::RejectReason;
-use crate::order::NewOrder;
+use crate::order::{ModifyOrder, NewOrder};
 use crate::output::Event;
 use crate::types::{OrderId, OrderType, SeqNum, TimeInForce, Timestamp};
 
@@ -96,5 +96,80 @@ impl MatchingEngine {
                 reason: RejectReason::UnknownOrder,
             }),
         }
+    }
+
+    pub(crate) fn execute_modify(
+        &mut self,
+        seq: SeqNum,
+        modify: ModifyOrder,
+        timestamp: Timestamp,
+        out: &mut Vec<Event>,
+    ) {
+        let Some((side, current)) = self.book.get(modify.order_id) else {
+            out.push(Event::Rejected {
+                seq,
+                reason: RejectReason::UnknownOrder,
+            });
+            return;
+        };
+
+        out.push(Event::Modified {
+            seq,
+            order_id: modify.order_id,
+        });
+
+        if modify.price == current.price && modify.qty <= current.qty {
+            if modify.qty < current.qty {
+                self.book.reduce(modify.order_id, modify.qty);
+            }
+            out.push(Event::Resting {
+                seq,
+                order_id: modify.order_id,
+                price: modify.price,
+                qty: modify.qty,
+            });
+            return;
+        }
+
+        self.book.cancel(modify.order_id);
+
+        let order_id = modify.order_id;
+        let remaining = self.book.match_against(
+            side,
+            Some(modify.price),
+            modify.qty,
+            |maker, traded, price| {
+                out.push(Event::Trade {
+                    seq,
+                    taker_order_id: order_id,
+                    maker_order_id: maker.id,
+                    price,
+                    qty: traded,
+                    taker_side: side,
+                });
+            },
+        );
+
+        if remaining == 0 {
+            out.push(Event::Filled { seq, order_id });
+            return;
+        }
+
+        self.book.insert(
+            side,
+            RestingOrder {
+                id: order_id,
+                seq,
+                price: modify.price,
+                qty: remaining,
+                timestamp,
+            },
+        );
+        out.push(Event::Resting {
+            seq,
+            order_id,
+            price: modify.price,
+            qty: remaining,
+        });
     }
 }

@@ -7,7 +7,7 @@
 ## Кратко
 
 - Качество: проходит весь done-gate — `cargo build --all-targets`, `cargo clippy -- -D warnings`, `cargo fmt --check` без замечаний.
-- Тесты: **12 интеграционных тестов** проходят (`cargo test`).
+- Тесты: **36 интеграционных тестов** проходят (`cargo test`) — матчинг/TIF/market ([matching.rs](../tests/matching.rs)), amend ([modify.rs](../tests/modify.rs)), отмена и интрузивный список ([cancel.rs](../tests/cancel.rs)), аксессоры книги и детерминизм ([book.rs](../tests/book.rs)); общие хелперы в [tests/common](../tests/common/mod.rs).
 - Зависимости: **нет** — только `std`.
 - Производительность: **~31 млн заявок/с** на синтетическом бенчмарке (release, один поток, `cargo run --release --example throughput`). Цифра зависит от железа и сценария, носит ориентировочный характер.
 - Редакция Rust: 2024.
@@ -16,12 +16,12 @@
 
 | Подсистема | Статус | Детали |
 | --- | --- | --- |
-| Входной API | ✅ | `Command::New` / `Command::Cancel`, конструкторы `NewOrder::limit` / `NewOrder::market`, `.with_tif()` |
+| Входной API | ✅ | `Command::New` / `Command::Cancel` / `Command::Modify`, конструкторы `NewOrder::limit` / `NewOrder::market`, `.with_tif()`, `ModifyOrder::new` |
 | **Gateway** | ✅ | Валидация: отказ при нулевом количестве и при нулевой цене лимитной заявки |
 | **Sequencer** | ✅ | Монотонные `seq` и `order_id`; детерминированный порядок |
-| **Matching Engine** | ✅ | Сведение по price-time priority; market/limit; TIF `Gtc` / `Ioc` / `Fok` |
+| **Matching Engine** | ✅ | Сведение по price-time priority; market/limit; TIF `Gtc` / `Ioc` / `Fok`; amend (`Modify`) |
 | **Order book** | ✅ | `BTreeMap` уровней по сторонам, интрузивный двусвязный FIFO-список внутри уровня (узлы в слабе-арене), `HashMap` индекс → отмена за `O(1)` |
-| **Output** | ✅ | События `Accepted`, `Trade`, `Resting`, `Filled`, `Canceled`, `Rejected` |
+| **Output** | ✅ | События `Accepted`, `Trade`, `Resting`, `Filled`, `Canceled`, `Modified`, `Rejected` |
 | Market data | ⚠️ частично | Снимок глубины `depth()`, `best_bid` / `best_ask` / `spread`; нет инкрементальных обновлений |
 | Примеры | ✅ | `examples/basic.rs`, `examples/throughput.rs` |
 
@@ -29,6 +29,12 @@
 
 - Типы: `Limit`, `Market`.
 - Time-in-force: `Gtc` (встаёт в книгу), `Ioc` (исполнить сейчас, остаток отменить), `Fok` (исполнить целиком или отклонить).
+
+## Изменение заявок (amend)
+
+- `Modify` меняет цену и/или количество стоящей заявки, сохраняя `order_id`.
+- Уменьшение количества при той же цене сохраняет приоритет (правка на месте, `O(1)`).
+- Смена цены или увеличение количества — потеря приоритета: заявка снимается и заново сводится (при пересечении спреда исполняется).
 
 ## Известные ограничения
 

@@ -175,6 +175,32 @@ impl OrderBook {
         Some(order)
     }
 
+    pub fn get(&self, order_id: OrderId) -> Option<(Side, RestingOrder)> {
+        let location = self.index.get(&order_id)?;
+        Some((location.side, self.slab.nodes[location.slot as usize].order))
+    }
+
+    pub fn reduce(&mut self, order_id: OrderId, new_qty: Qty) -> Option<RestingOrder> {
+        let location = *self.index.get(&order_id)?;
+        let (price, delta, updated) = {
+            let node = &mut self.slab.nodes[location.slot as usize];
+            if new_qty >= node.order.qty {
+                return None;
+            }
+            let delta = node.order.qty - new_qty;
+            node.order.qty = new_qty;
+            (node.order.price, delta, node.order)
+        };
+        let book = match location.side {
+            Side::Buy => &mut self.bids,
+            Side::Sell => &mut self.asks,
+        };
+        if let Some(level) = book.get_mut(&price) {
+            level.total_qty -= delta;
+        }
+        Some(updated)
+    }
+
     pub fn match_against<F>(
         &mut self,
         taker_side: Side,

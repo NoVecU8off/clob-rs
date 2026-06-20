@@ -39,6 +39,9 @@ impl Clob {
             Command::Cancel(cancel) => {
                 self.engine.execute_cancel(seq, cancel.order_id, out);
             }
+            Command::Modify(modify) => {
+                self.engine.execute_modify(seq, modify, seq, out);
+            }
         }
     }
 

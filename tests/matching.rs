@@ -1,26 +1,8 @@
+mod common;
+
 use clob::{Clob, Command, Event, NewOrder, RejectReason, Side, TimeInForce};
 
-fn trades(events: &[Event]) -> Vec<(u64, u64, u64)> {
-    events
-        .iter()
-        .filter_map(|e| match e {
-            Event::Trade {
-                maker_order_id,
-                price,
-                qty,
-                ..
-            } => Some((*maker_order_id, *price, *qty)),
-            _ => None,
-        })
-        .collect()
-}
-
-fn resting(events: &[Event]) -> Option<(u64, u64)> {
-    events.iter().find_map(|e| match e {
-        Event::Resting { price, qty, .. } => Some((*price, *qty)),
-        _ => None,
-    })
-}
+use common::{resting, trades};
 
 #[test]
 fn limit_order_rests_when_no_cross() {

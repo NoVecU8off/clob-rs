@@ -33,4 +33,8 @@ pub enum Event {
         seq: SeqNum,
         order_id: OrderId,
     },
+    Modified {
+        seq: SeqNum,
+        order_id: OrderId,
+    },
 }
