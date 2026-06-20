@@ -41,6 +41,14 @@ impl MatchingEngine {
             return;
         }
 
+        if order.tif == TimeInForce::PostOnly && self.book.would_cross(order.side, limit_price) {
+            out.push(Event::Rejected {
+                seq,
+                reason: RejectReason::WouldCross,
+            });
+            return;
+        }
+
         out.push(Event::Accepted { seq, order_id });
 
         let taker_side = order.side;
@@ -65,7 +73,8 @@ impl MatchingEngine {
             return;
         }
 
-        let rest_on_book = order.order_type == OrderType::Limit && order.tif == TimeInForce::Gtc;
+        let rest_on_book = order.order_type == OrderType::Limit
+            && matches!(order.tif, TimeInForce::Gtc | TimeInForce::PostOnly);
         if rest_on_book {
             self.book.insert(
                 taker_side,

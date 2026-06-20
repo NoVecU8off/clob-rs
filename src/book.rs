@@ -142,6 +142,14 @@ impl OrderBook {
         total
     }
 
+    pub fn would_cross(&self, taker_side: Side, limit_price: Option<Price>) -> bool {
+        match (taker_side, limit_price) {
+            (_, None) => true,
+            (Side::Buy, Some(limit)) => self.best_ask().is_some_and(|ask| limit >= ask),
+            (Side::Sell, Some(limit)) => self.best_bid().is_some_and(|bid| limit <= bid),
+        }
+    }
+
     pub fn insert(&mut self, side: Side, order: RestingOrder) {
         let slot = self.slab.alloc(Node {
             order,

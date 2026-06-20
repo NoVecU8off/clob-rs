@@ -159,6 +159,114 @@ fn zero_quantity_is_rejected_by_gateway() {
 }
 
 #[test]
+fn post_only_rejected_when_it_would_cross() {
+    let mut clob = Clob::new();
+    clob.submit(Command::New(NewOrder::limit(Side::Sell, 101, 5)));
+
+    let events = clob.submit(Command::New(
+        NewOrder::limit(Side::Buy, 102, 4).with_tif(TimeInForce::PostOnly),
+    ));
+
+    assert!(trades(&events).is_empty());
+    assert!(resting(&events).is_none());
+    assert!(!events.iter().any(|e| matches!(e, Event::Accepted { .. })));
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::Rejected {
+            reason: RejectReason::WouldCross,
+            ..
+        }
+    )));
+    assert_eq!(clob.book().best_ask(), Some(101));
+    assert!(clob.book().best_bid().is_none());
+}
+
+#[test]
+fn post_only_rejected_at_touching_price() {
+    let mut clob = Clob::new();
+    clob.submit(Command::New(NewOrder::limit(Side::Sell, 101, 5)));
+
+    let events = clob.submit(Command::New(
+        NewOrder::limit(Side::Buy, 101, 4).with_tif(TimeInForce::PostOnly),
+    ));
+
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::Rejected {
+            reason: RejectReason::WouldCross,
+            ..
+        }
+    )));
+    assert!(clob.book().best_bid().is_none());
+}
+
+#[test]
+fn post_only_rests_when_it_would_not_cross() {
+    let mut clob = Clob::new();
+    clob.submit(Command::New(NewOrder::limit(Side::Sell, 101, 5)));
+
+    let events = clob.submit(Command::New(
+        NewOrder::limit(Side::Buy, 100, 4).with_tif(TimeInForce::PostOnly),
+    ));
+
+    assert!(trades(&events).is_empty());
+    assert_eq!(resting(&events), Some((100, 4)));
+    assert_eq!(clob.book().best_bid(), Some(100));
+    assert_eq!(clob.book().best_ask(), Some(101));
+}
+
+#[test]
+fn post_only_sell_rejected_when_it_would_cross() {
+    let mut clob = Clob::new();
+    clob.submit(Command::New(NewOrder::limit(Side::Buy, 100, 5)));
+
+    let events = clob.submit(Command::New(
+        NewOrder::limit(Side::Sell, 100, 4).with_tif(TimeInForce::PostOnly),
+    ));
+
+    assert!(trades(&events).is_empty());
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::Rejected {
+            reason: RejectReason::WouldCross,
+            ..
+        }
+    )));
+    assert_eq!(clob.book().best_bid(), Some(100));
+    assert!(clob.book().best_ask().is_none());
+}
+
+#[test]
+fn post_only_rests_on_empty_book() {
+    let mut clob = Clob::new();
+    let events = clob.submit(Command::New(
+        NewOrder::limit(Side::Buy, 100, 5).with_tif(TimeInForce::PostOnly),
+    ));
+
+    assert!(trades(&events).is_empty());
+    assert_eq!(resting(&events), Some((100, 5)));
+    assert_eq!(clob.book().best_bid(), Some(100));
+}
+
+#[test]
+fn post_only_market_is_rejected() {
+    let mut clob = Clob::new();
+    let events = clob.submit(Command::New(
+        NewOrder::market(Side::Buy, 5).with_tif(TimeInForce::PostOnly),
+    ));
+
+    assert!(trades(&events).is_empty());
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::Rejected {
+            reason: RejectReason::WouldCross,
+            ..
+        }
+    )));
+    assert!(clob.book().is_empty());
+}
+
+#[test]
 fn book_is_never_crossed_after_matching() {
     let mut clob = Clob::new();
     clob.submit(Command::New(NewOrder::limit(Side::Sell, 101, 5)));

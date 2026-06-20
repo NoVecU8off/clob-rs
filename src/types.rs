@@ -31,4 +31,5 @@ pub enum TimeInForce {
     Gtc,
     Ioc,
     Fok,
+    PostOnly,
 }
