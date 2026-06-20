@@ -3,6 +3,7 @@ pub type SeqNum = u64;
 pub type Timestamp = u64;
 pub type Price = u64;
 pub type Qty = u64;
+pub type AccountId = u64;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Side {
@@ -35,4 +36,13 @@ pub enum TimeInForce {
     Ioc,
     Fok,
     PostOnly,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum StpMode {
+    #[default]
+    Off,
+    CancelTaker,
+    CancelMaker,
+    CancelBoth,
 }

@@ -105,6 +105,19 @@ Iceberg-заявки (`Iceberg { display }`) встают в книгу как �
 айсберга трактует `qty` как новый полный объём, сохраняет `display` и переставляет заявку
 заново (теряя приоритет).
 
+**Self-trade prevention (STP).** Заявка может нести владельца (`owner: AccountId`) и режим
+`stp: StpMode` (`Off` | `CancelTaker` | `CancelMaker` | `CancelBoth`; по умолчанию `Off`, `owner = 0`).
+При сведении движок проверяет самопересечение **по каждому встречному мейкеру**: если `taker.stp != Off`,
+`taker.owner != 0` и владелец мейкера совпадает с владельцем агрессора, вместо сделки применяется
+политика **агрессора** (taker governs — `stp` стоящего мейкера не читается, ему достаточно совпасть по
+владельцу): `CancelTaker` обрывает обход и снимает остаток агрессора (`Canceled`), мейкер цел;
+`CancelMaker` снимает встреченный стоящий ордер (`Canceled`) и агрессор продолжает обход очереди;
+`CancelBoth` снимает оба. Решение точечно — чужая ликвидность на пути сводится нормально, поэтому STP
+не сбивает price-time priority для прочих участников. `owner` — **непрозрачный токен равенства**: ядро
+его только сравнивает (аутентификация — слой выше), хранит инлайном на `RestingOrder` и в публичные
+проекции market data не выдаёт. Сработавший стоп несёт свои `owner` / `stp` и на активации подчиняется
+STP как обычный агрессор. STP проверяется на `New`; `Modify` (amend) пере-сводится без STP.
+
 ### Output — [src/output.rs](../src/output.rs)
 
 Единый перечень событий `Event`:
@@ -147,6 +160,9 @@ Iceberg-заявки (`Iceberg { display }`) встают в книгу как �
   в хвост, сведение с головы.
 - Узлы заявок живут в общей арене (`slab`) со списком свободных слотов —
   аллокации переиспользуются, без выделения памяти на заявку в установившемся режиме.
+  Слаб, узлы и `PriceLevel` (интрузивный список и его операции `link_back` / `unlink`)
+  вынесены в [src/slab.rs](../src/slab.rs). `RestingOrder` дополнительно несёт `owner`
+  (для STP) — в глубину и публичные проекции он не входит.
 - `index` сопоставляет `OrderId → (сторона, слот)`, поэтому отмена отцепляет узел
   из списка за `O(1)`, без обхода уровня.
 - `reserves` держит скрытые части iceberg-заявок (`OrderId → {display, hidden}`):
@@ -177,6 +193,8 @@ match_against(taker_side, limit_price, qty):
         level = opp[best]
         while qty > 0 и level не пуст:
             head = slab[level.head]                     # самый ранний мейкер
+            if taker.stp != Off и head.owner == taker.owner:  # STP: самопересечение
+                применить политику тейкера (cancel taker → break; maker → снять и continue; both)
             traded = min(qty, head.qty)
             head.qty -= traded;  qty -= traded
             emit Trade(maker=head.id, price=best, qty=traded)
@@ -403,11 +421,12 @@ open(journal, snapshot):
 
 | Модуль | Содержимое |
 | --- | --- |
-| [src/types.rs](../src/types.rs) | примитивы: `OrderId`, `Price`, `Qty`, `Side`, `OrderType`, `TimeInForce` |
-| [src/order.rs](../src/order.rs) | входной API: `Command`, `NewOrder`, `CancelOrder`, `ModifyOrder` |
+| [src/types.rs](../src/types.rs) | примитивы: `OrderId`, `AccountId`, `Price`, `Qty`, `Side`, `OrderType`, `TimeInForce`, `StpMode` |
+| [src/order.rs](../src/order.rs) | входной API: `Command`, `NewOrder` (вкл. `owner` / `stp`), `CancelOrder`, `ModifyOrder` |
 | [src/gateway.rs](../src/gateway.rs) | стадия Gateway |
 | [src/sequencer.rs](../src/sequencer.rs) | стадия Sequencer |
-| [src/book.rs](../src/book.rs) | ордербук и алгоритм сведения |
+| [src/book.rs](../src/book.rs) | ордербук, алгоритм сведения и self-trade prevention |
+| [src/slab.rs](../src/slab.rs) | слаб-арена узлов и интрузивный FIFO-список уровня (`Slab` / `PriceLevel`) |
 | [src/engine.rs](../src/engine.rs) | стадия Matching Engine |
 | [src/stops.rs](../src/stops.rs) | книга стоп-заявок (триггеры, каскадная активация) |
 | [src/output.rs](../src/output.rs) | модель событий |

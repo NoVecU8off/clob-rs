@@ -5,12 +5,12 @@ use std::path::{Path, PathBuf};
 use crate::book::{RestingEntry, RestingOrder};
 use crate::clob::Clob;
 use crate::codec::{Reader, Writer, crc32};
-use crate::journal::{JournalError, decode_tif, tif_code};
+use crate::journal::{JournalError, decode_stp, decode_tif, stp_code, tif_code};
 use crate::stops::PendingStop;
 use crate::types::{OrderId, OrderType, Price, SeqNum, Side};
 
 const SNAP_MAGIC: [u8; 4] = *b"CLBS";
-const SNAP_VERSION: u16 = 1;
+const SNAP_VERSION: u16 = 2;
 const MIN_LEN: usize = 4 + 2 + 4;
 
 pub(crate) struct SnapshotState {
@@ -67,6 +67,7 @@ fn encode(state: &SnapshotState) -> Vec<u8> {
         w.varint(order.price);
         w.varint(order.qty);
         w.varint(order.timestamp);
+        w.varint(order.owner);
         match reserve {
             Some((display, hidden)) => {
                 w.u8(1);
@@ -85,6 +86,8 @@ fn encode(state: &SnapshotState) -> Vec<u8> {
         w.varint(stop.limit_price);
         w.varint(stop.qty);
         w.u8(tif_code(stop.tif));
+        w.varint(stop.owner);
+        w.u8(stp_code(stop.stp));
     }
     let crc = crc32(w.as_slice());
     w.u32(crc);
@@ -126,6 +129,7 @@ fn decode(data: &[u8]) -> Result<SnapshotState, JournalError> {
             price: r.varint()?,
             qty: r.varint()?,
             timestamp: r.varint()?,
+            owner: r.varint()?,
         };
         let reserve = if r.u8()? == 1 {
             Some((r.varint()?, r.varint()?))
@@ -148,6 +152,8 @@ fn decode(data: &[u8]) -> Result<SnapshotState, JournalError> {
         let limit_price = r.varint()?;
         let qty = r.varint()?;
         let tif = decode_tif(r.u8()?)?;
+        let owner = r.varint()?;
+        let stp = decode_stp(r.u8()?);
         stops.push(PendingStop {
             id,
             side,
@@ -156,6 +162,8 @@ fn decode(data: &[u8]) -> Result<SnapshotState, JournalError> {
             limit_price,
             qty,
             tif,
+            owner,
+            stp,
         });
     }
     Ok(SnapshotState {

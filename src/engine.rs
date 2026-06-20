@@ -3,7 +3,9 @@ use crate::error::RejectReason;
 use crate::order::{ModifyOrder, NewOrder};
 use crate::output::Event;
 use crate::stops::{PendingStop, StopBook};
-use crate::types::{OrderId, OrderType, Price, Qty, SeqNum, Side, TimeInForce, Timestamp};
+use crate::types::{
+    AccountId, OrderId, OrderType, Price, Qty, SeqNum, Side, StpMode, TimeInForce, Timestamp,
+};
 
 struct Live {
     seq: SeqNum,
@@ -14,6 +16,8 @@ struct Live {
     tif: TimeInForce,
     timestamp: Timestamp,
     display: Qty,
+    owner: AccountId,
+    stp: StpMode,
 }
 
 #[derive(Debug, Default)]
@@ -92,6 +96,8 @@ impl MatchingEngine {
                     limit_price,
                     qty: order.qty,
                     tif: order.tif,
+                    owner: order.owner,
+                    stp: order.stp,
                 });
                 self.drive_stops(seq, timestamp, out);
             }
@@ -116,6 +122,8 @@ impl MatchingEngine {
                         tif: order.tif,
                         timestamp,
                         display,
+                        owner: order.owner,
+                        stp: order.stp,
                     },
                     out,
                 );
@@ -167,6 +175,8 @@ impl MatchingEngine {
                     tif: TimeInForce::Gtc,
                     timestamp,
                     display,
+                    owner: current.owner,
+                    stp: StpMode::Off,
                 },
                 out,
             );
@@ -198,6 +208,8 @@ impl MatchingEngine {
                 tif: TimeInForce::Gtc,
                 timestamp,
                 display: 0,
+                owner: current.owner,
+                stp: StpMode::Off,
             },
             out,
         );
@@ -230,12 +242,18 @@ impl MatchingEngine {
             tif,
             timestamp,
             display,
+            owner,
+            stp,
         } = live;
 
         let mut last_px = None;
-        let remaining = self
-            .book
-            .match_against(side, limit_price, qty, |maker, traded, price| {
+        let outcome = self.book.match_against(
+            side,
+            owner,
+            stp,
+            limit_price,
+            qty,
+            |maker, traded, price| {
                 out.push(Event::Trade {
                     seq,
                     taker_order_id: order_id,
@@ -245,11 +263,24 @@ impl MatchingEngine {
                     taker_side: side,
                 });
                 last_px = Some(price);
-            });
+            },
+        );
         if let Some(price) = last_px {
             self.last_trade_price = Some(price);
         }
+        for maker_id in outcome.self_canceled {
+            out.push(Event::Canceled {
+                seq,
+                order_id: maker_id,
+            });
+        }
 
+        if outcome.taker_canceled {
+            out.push(Event::Canceled { seq, order_id });
+            return;
+        }
+
+        let remaining = outcome.remaining;
         if remaining == 0 {
             out.push(Event::Filled { seq, order_id });
             return;
@@ -271,6 +302,7 @@ impl MatchingEngine {
                     price,
                     qty: visible,
                     timestamp,
+                    owner,
                 },
             );
             if hidden > 0 {
@@ -315,6 +347,8 @@ impl MatchingEngine {
                     tif: stop.tif,
                     timestamp,
                     display: 0,
+                    owner: stop.owner,
+                    stp: stop.stp,
                 },
                 out,
             );

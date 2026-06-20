@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 
-use crate::types::{OrderId, Price, Qty, SeqNum, Side, Timestamp};
+use crate::slab::{Node, PriceLevel, Slab};
+use crate::types::{AccountId, OrderId, Price, Qty, SeqNum, Side, StpMode, Timestamp};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RestingOrder {
@@ -9,48 +10,16 @@ pub struct RestingOrder {
     pub price: Price,
     pub qty: Qty,
     pub timestamp: Timestamp,
+    pub owner: AccountId,
 }
 
 pub(crate) type RestingEntry = (Side, RestingOrder, Option<(Qty, Qty)>);
 
-#[derive(Clone, Copy, Debug)]
-struct Node {
-    order: RestingOrder,
-    prev: Option<u32>,
-    next: Option<u32>,
-}
-
-#[derive(Debug, Default)]
-struct Slab {
-    nodes: Vec<Node>,
-    free: Vec<u32>,
-}
-
-impl Slab {
-    fn alloc(&mut self, node: Node) -> u32 {
-        match self.free.pop() {
-            Some(slot) => {
-                self.nodes[slot as usize] = node;
-                slot
-            }
-            None => {
-                let slot = self.nodes.len() as u32;
-                self.nodes.push(node);
-                slot
-            }
-        }
-    }
-
-    fn dealloc(&mut self, slot: u32) {
-        self.free.push(slot);
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct PriceLevel {
-    head: Option<u32>,
-    tail: Option<u32>,
-    total_qty: Qty,
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MatchOutcome {
+    pub remaining: Qty,
+    pub taker_canceled: bool,
+    pub self_canceled: Vec<OrderId>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -197,7 +166,7 @@ impl OrderBook {
         };
         let level = book.entry(order.price).or_default();
         level.total_qty += order.qty;
-        Self::link_back(&mut self.slab, level, slot);
+        level.link_back(&mut self.slab, slot);
     }
 
     pub fn add_reserve(&mut self, order_id: OrderId, display: Qty, hidden: Qty) {
@@ -232,7 +201,7 @@ impl OrderBook {
         };
         let level = book.get_mut(&order.price)?;
         level.total_qty -= order.qty;
-        Self::unlink(&mut self.slab, level, location.slot);
+        level.unlink(&mut self.slab, location.slot);
         if level.head.is_none() {
             book.remove(&order.price);
         }
@@ -270,13 +239,17 @@ impl OrderBook {
     pub fn match_against<F>(
         &mut self,
         taker_side: Side,
+        taker_owner: AccountId,
+        taker_stp: StpMode,
         limit_price: Option<Price>,
         mut qty: Qty,
         mut on_trade: F,
-    ) -> Qty
+    ) -> MatchOutcome
     where
         F: FnMut(&RestingOrder, Qty, Price),
     {
+        let mut taker_canceled = false;
+        let mut self_canceled = Vec::new();
         while qty > 0 {
             let book = match taker_side {
                 Side::Buy => &mut self.asks,
@@ -300,10 +273,48 @@ impl OrderBook {
             }
 
             let level = book.get_mut(&best_price).expect("price level must exist");
+            let mut stop = false;
             while qty > 0 {
                 let Some(slot) = level.head else {
                     break;
                 };
+                if taker_stp != StpMode::Off
+                    && taker_owner != 0
+                    && self.slab.nodes[slot as usize].order.owner == taker_owner
+                {
+                    match taker_stp {
+                        StpMode::CancelMaker => {
+                            let id = Self::detach(
+                                &mut self.slab,
+                                &mut self.index,
+                                &mut self.reserves,
+                                level,
+                                slot,
+                            );
+                            self_canceled.push(id);
+                            continue;
+                        }
+                        StpMode::CancelBoth => {
+                            let id = Self::detach(
+                                &mut self.slab,
+                                &mut self.index,
+                                &mut self.reserves,
+                                level,
+                                slot,
+                            );
+                            self_canceled.push(id);
+                            taker_canceled = true;
+                            stop = true;
+                            break;
+                        }
+                        StpMode::CancelTaker => {
+                            taker_canceled = true;
+                            stop = true;
+                            break;
+                        }
+                        StpMode::Off => {}
+                    }
+                }
                 let (traded, fill, filled) = {
                     let node = &mut self.slab.nodes[slot as usize];
                     let traded = qty.min(node.order.qty);
@@ -334,12 +345,12 @@ impl OrderBook {
                         Some(peak) => {
                             self.slab.nodes[slot as usize].order.qty = peak;
                             level.total_qty += peak;
-                            Self::unlink(&mut self.slab, level, slot);
-                            Self::link_back(&mut self.slab, level, slot);
+                            level.unlink(&mut self.slab, slot);
+                            level.link_back(&mut self.slab, slot);
                         }
                         None => {
                             self.index.remove(&fill.id);
-                            Self::unlink(&mut self.slab, level, slot);
+                            level.unlink(&mut self.slab, slot);
                             self.slab.dealloc(slot);
                         }
                     }
@@ -349,36 +360,33 @@ impl OrderBook {
             if level.head.is_none() {
                 book.remove(&best_price);
             }
+            if stop {
+                break;
+            }
         }
-        qty
+        MatchOutcome {
+            remaining: qty,
+            taker_canceled,
+            self_canceled,
+        }
     }
 
-    fn link_back(slab: &mut Slab, level: &mut PriceLevel, slot: u32) {
-        let prev = level.tail;
-        {
-            let node = &mut slab.nodes[slot as usize];
-            node.prev = prev;
-            node.next = None;
-        }
-        match prev {
-            Some(p) => slab.nodes[p as usize].next = Some(slot),
-            None => level.head = Some(slot),
-        }
-        level.tail = Some(slot);
-    }
-
-    fn unlink(slab: &mut Slab, level: &mut PriceLevel, slot: u32) {
-        let (prev, next) = {
-            let node = &slab.nodes[slot as usize];
-            (node.prev, node.next)
+    fn detach(
+        slab: &mut Slab,
+        index: &mut HashMap<OrderId, Location>,
+        reserves: &mut HashMap<OrderId, Reserve>,
+        level: &mut PriceLevel,
+        slot: u32,
+    ) -> OrderId {
+        let (id, qty) = {
+            let order = &slab.nodes[slot as usize].order;
+            (order.id, order.qty)
         };
-        match prev {
-            Some(p) => slab.nodes[p as usize].next = next,
-            None => level.head = next,
-        }
-        match next {
-            Some(n) => slab.nodes[n as usize].prev = prev,
-            None => level.tail = prev,
-        }
+        level.total_qty -= qty;
+        level.unlink(slab, slot);
+        index.remove(&id);
+        reserves.remove(&id);
+        slab.dealloc(slot);
+        id
     }
 }

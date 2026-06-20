@@ -11,13 +11,14 @@ mod order;
 mod output;
 mod persist;
 mod sequencer;
+mod slab;
 mod snapshot;
 mod stops;
 mod tape;
 mod types;
 mod wal;
 
-pub use book::{OrderBook, RestingOrder};
+pub use book::{MatchOutcome, OrderBook, RestingOrder};
 pub use clob::Clob;
 pub use codec::CodecError;
 pub use engine::MatchingEngine;
@@ -31,5 +32,7 @@ pub use output::Event;
 pub use persist::PersistentClob;
 pub use sequencer::Sequencer;
 pub use tape::{TapeTrade, TradeTape};
-pub use types::{OrderId, OrderType, Price, Qty, SeqNum, Side, TimeInForce, Timestamp};
+pub use types::{
+    AccountId, OrderId, OrderType, Price, Qty, SeqNum, Side, StpMode, TimeInForce, Timestamp,
+};
 pub use wal::{Journal, read_commands};

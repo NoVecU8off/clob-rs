@@ -1,9 +1,9 @@
 use crate::codec::{CodecError, Reader, Writer};
 use crate::order::{CancelOrder, Command, ModifyOrder, NewOrder};
-use crate::types::{OrderType, Side, TimeInForce};
+use crate::types::{OrderType, Side, StpMode, TimeInForce};
 
 pub(crate) const MAGIC: [u8; 4] = *b"CLBW";
-pub(crate) const FORMAT_VERSION: u16 = 1;
+pub(crate) const FORMAT_VERSION: u16 = 2;
 pub(crate) const HEADER_LEN: usize = 14;
 
 const TAG_NEW: u8 = 1;
@@ -59,7 +59,10 @@ pub(crate) fn encode_command(w: &mut Writer, command: &Command) {
         Command::New(order) => {
             w.u8(TAG_NEW);
             let side_bit = matches!(order.side, Side::Sell) as u8;
-            w.u8(side_bit | (type_code(order.order_type) << 1) | (tif_code(order.tif) << 4));
+            w.u8(side_bit
+                | (type_code(order.order_type) << 1)
+                | (tif_code(order.tif) << 4)
+                | (stp_code(order.stp) << 6));
             match order.order_type {
                 OrderType::Limit => {
                     w.varint(order.price);
@@ -81,6 +84,7 @@ pub(crate) fn encode_command(w: &mut Writer, command: &Command) {
                     w.varint(order.qty);
                 }
             }
+            w.varint(order.owner);
         }
         Command::Cancel(cancel) => {
             w.u8(TAG_CANCEL);
@@ -105,6 +109,7 @@ pub(crate) fn decode_command(r: &mut Reader) -> Result<Command, JournalError> {
                 Side::Buy
             };
             let tif = decode_tif((flags >> 4) & 0x3)?;
+            let stp = decode_stp((flags >> 6) & 0x3);
             let (order_type, price, qty) = match (flags >> 1) & 0x7 {
                 0 => {
                     let price = r.varint()?;
@@ -127,12 +132,15 @@ pub(crate) fn decode_command(r: &mut Reader) -> Result<Command, JournalError> {
                 }
                 other => return Err(JournalError::UnknownOrderType(other)),
             };
+            let owner = r.varint()?;
             Ok(Command::New(NewOrder {
                 side,
                 order_type,
                 price,
                 qty,
                 tif,
+                owner,
+                stp,
             }))
         }
         TAG_CANCEL => Ok(Command::Cancel(CancelOrder {
@@ -173,5 +181,23 @@ pub(crate) fn decode_tif(code: u8) -> Result<TimeInForce, JournalError> {
         2 => Ok(TimeInForce::Fok),
         3 => Ok(TimeInForce::PostOnly),
         other => Err(JournalError::UnknownTif(other)),
+    }
+}
+
+pub(crate) fn stp_code(stp: StpMode) -> u8 {
+    match stp {
+        StpMode::Off => 0,
+        StpMode::CancelTaker => 1,
+        StpMode::CancelMaker => 2,
+        StpMode::CancelBoth => 3,
+    }
+}
+
+pub(crate) fn decode_stp(code: u8) -> StpMode {
+    match code {
+        0 => StpMode::Off,
+        1 => StpMode::CancelTaker,
+        2 => StpMode::CancelMaker,
+        _ => StpMode::CancelBoth,
     }
 }

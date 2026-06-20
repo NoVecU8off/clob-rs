@@ -1,4 +1,4 @@
-use crate::types::{OrderId, OrderType, Price, Qty, Side, TimeInForce};
+use crate::types::{AccountId, OrderId, OrderType, Price, Qty, Side, StpMode, TimeInForce};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
@@ -14,6 +14,8 @@ pub struct NewOrder {
     pub price: Price,
     pub qty: Qty,
     pub tif: TimeInForce,
+    pub owner: AccountId,
+    pub stp: StpMode,
 }
 
 impl NewOrder {
@@ -24,6 +26,8 @@ impl NewOrder {
             price,
             qty,
             tif: TimeInForce::Gtc,
+            owner: 0,
+            stp: StpMode::Off,
         }
     }
 
@@ -34,6 +38,8 @@ impl NewOrder {
             price: 0,
             qty,
             tif: TimeInForce::Ioc,
+            owner: 0,
+            stp: StpMode::Off,
         }
     }
 
@@ -44,6 +50,8 @@ impl NewOrder {
             price: 0,
             qty,
             tif: TimeInForce::Ioc,
+            owner: 0,
+            stp: StpMode::Off,
         }
     }
 
@@ -54,6 +62,8 @@ impl NewOrder {
             price: limit,
             qty,
             tif: TimeInForce::Gtc,
+            owner: 0,
+            stp: StpMode::Off,
         }
     }
 
@@ -64,11 +74,23 @@ impl NewOrder {
             price,
             qty,
             tif: TimeInForce::Gtc,
+            owner: 0,
+            stp: StpMode::Off,
         }
     }
 
     pub fn with_tif(mut self, tif: TimeInForce) -> Self {
         self.tif = tif;
+        self
+    }
+
+    pub fn with_owner(mut self, owner: AccountId) -> Self {
+        self.owner = owner;
+        self
+    }
+
+    pub fn with_stp(mut self, stp: StpMode) -> Self {
+        self.stp = stp;
         self
     }
 }

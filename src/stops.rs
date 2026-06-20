@@ -1,4 +1,4 @@
-use crate::types::{OrderId, OrderType, Price, Qty, Side, TimeInForce};
+use crate::types::{AccountId, OrderId, OrderType, Price, Qty, Side, StpMode, TimeInForce};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct PendingStop {
@@ -9,6 +9,8 @@ pub(crate) struct PendingStop {
     pub(crate) limit_price: Price,
     pub(crate) qty: Qty,
     pub(crate) tif: TimeInForce,
+    pub(crate) owner: AccountId,
+    pub(crate) stp: StpMode,
 }
 
 impl PendingStop {
