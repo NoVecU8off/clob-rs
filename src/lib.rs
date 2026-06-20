@@ -1,20 +1,28 @@
 mod book;
 mod clob;
+mod codec;
 mod engine;
 mod error;
 mod gateway;
+mod journal;
 mod order;
 mod output;
+mod persist;
 mod sequencer;
 mod stops;
 mod types;
+mod wal;
 
 pub use book::{OrderBook, RestingOrder};
 pub use clob::Clob;
+pub use codec::CodecError;
 pub use engine::MatchingEngine;
 pub use error::RejectReason;
 pub use gateway::Gateway;
+pub use journal::JournalError;
 pub use order::{CancelOrder, Command, ModifyOrder, NewOrder};
 pub use output::Event;
+pub use persist::PersistentClob;
 pub use sequencer::Sequencer;
 pub use types::{OrderId, OrderType, Price, Qty, SeqNum, Side, TimeInForce, Timestamp};
+pub use wal::{Journal, read_commands};
