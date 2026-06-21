@@ -44,8 +44,21 @@ let events: Vec<Event> = clob.submit(Command::New(NewOrder::limit(Side::Buy, 101
 - `Modify` с `qty == 0` или `price == 0` отклоняется по тем же правилам;
 - отмена проходит всегда (существование заявки проверяет движок).
 
-Сюда же логично добавлять правила инструмента (размер тика/лота, ценовые коридоры,
-pre-trade risk) — структура без полей оставлена расширяемой.
+**Pre-trade risk (opt-in).** При сконфигурированном `RiskConfig` ([src/risk.rs](../src/risk.rs);
+подключается через `Clob::with_risk` / `PersistentClob::open_with_risk`, дефолт — off, поведение
+не меняется) Gateway дополнительно проверяет:
+
+- **тик/лот** — кратность цены `tick_size` (лимит-цена, `trigger`, оба поля stop-limit, цена
+  айсберга) и объёма/`display` — `lot_size`;
+- **ценовой коридор** — цена в окне `±band_ticks` тиков от `mid = (best_bid + best_ask) / 2`
+  (только Limit/Iceberg; стопы и market — мимо; на холодной/односторонней книге пропуск). Mid
+  считает `Clob` из книги и кладёт в контекст валидации — Gateway сам книгу не читает (разделение
+  стадий сохранено);
+- **лимит позиции** — нетто-знаковый worst-case `net + открытый объём стороны + qty ≤ limit`
+  (только `owner != 0`; аноним освобождён).
+
+Причины отказа — `TickSize`, `LotSize`, `PriceBand`, `PositionLimit`. Конфиг статичен и неизменяем,
+поэтому детерминизм сохранён; пер-счётные нетто-позицию и открытый объём ведёт книга (см. ниже).
 
 ### Sequencer — [src/sequencer.rs](../src/sequencer.rs)
 
@@ -133,17 +146,23 @@ STP как обычный агрессор. STP проверяется на `New
 | `Triggered` | стоп-заявка сработала; далее идут события исхода |
 | `Rejected` | отказ (gateway, нехватка ликвидности для FOK или пересечение спреда для post-only) |
 
-## Структура ордербука — [src/book.rs](../src/book.rs)
+## Структура ордербука — [src/book/](../src/book/)
+
+Модуль — каталог `src/book/`: `mod.rs` (структура и операции книги, индексы), `matching.rs`
+(`match_against` / `detach` — алгоритм сведения и self-trade prevention), `accounts.rs`
+(`AccountBook` — пер-счётные агрегаты для pre-trade risk). Подмодули — потомки `book`, поэтому
+видят приватные поля `OrderBook`; разбиение продиктовано лимитом 400 строк на файл.
 
 ```
                  OrderBook
-   ┌─────────────────────────────────────┐
-   │ bids:  BTreeMap<Price, PriceLevel>   │   максимальная цена = лучший bid
-   │ asks:  BTreeMap<Price, PriceLevel>   │   минимальная цена = лучший ask
-   │ slab:  Vec<Node> + список свободных   │   арена узлов заявок
-   │ index: HashMap<OrderId, {side, slot}> │   поиск узла для отмены за O(1)
-   │ reserves: HashMap<OrderId,{disp,hid}> │   скрытые части iceberg-заявок
-   └─────────────────────────────────────┘
+   ┌──────────────────────────────────────┐
+   │ bids:  BTreeMap<Price, PriceLevel>    │   максимальная цена = лучший bid
+   │ asks:  BTreeMap<Price, PriceLevel>    │   минимальная цена = лучший ask
+   │ slab:  Vec<Node> + список свободных    │   арена узлов заявок
+   │ index: HashMap<OrderId, {side, slot}>  │   поиск узла для отмены за O(1)
+   │ reserves: HashMap<OrderId,{disp,hid}>  │   скрытые части iceberg-заявок
+   │ accounts: HashMap<AccountId,{net,open}>│   нетто-позиция и открытый объём по счёту
+   └──────────────────────────────────────┘
                     │
                     ▼  PriceLevel (один ценовой уровень)
    ┌────────────────────────────────────┐
@@ -168,6 +187,13 @@ STP как обычный агрессор. STP проверяется на `New
 - `reserves` держит скрытые части iceberg-заявок (`OrderId → {display, hidden}`):
   видимый peak — обычный узел в слабе и в `total_qty` уровня, а резерв лежит отдельно
   и в глубину не входит. Запись появляется только у айсбергов с непустым резервом.
+- `accounts` ([src/book/accounts.rs](../src/book/accounts.rs)) ведёт пер-счётные агрегаты для
+  pre-trade risk: нетто-позицию (`i128`, знаковую) и открытый объём по сторонам (полный остаток,
+  вкл. скрытый резерв айсберга). Обновляется на `insert` / `cancel` / `reduce` / сведении /
+  STP-`detach` — книга единственный мутатор стоящего объёма и видит обоих участников каждой
+  сделки, поэтому агрегаты не расходятся с книгой без прокидывания `owner` через обезличенные
+  события; `owner == 0` (аноним) не учитывается. Нетто переживает снимок, открытый объём
+  восстанавливается перезаливкой стоящих заявок.
 
 ### Сложность
 
@@ -391,8 +417,11 @@ FIFO-порядок, итерация внутренних `HashMap` (`id → у
 Снимок сериализует всё, что влияет на дальнейшую обработку: счётчики секвенсора `seq` и
 `next_order_id` (последний не выводится из `seq` — `Cancel`/`Modify` тратят `seq`, но не
 `order_id`), цену последней сделки (нужна для триггеров стопов), все стоящие заявки в порядке
-приоритета вместе со скрытыми резервами айсбергов и спящие стопы. Формат — `magic "CLBS"` +
-версия, varint-поля, единый кадр с CRC32 в конце.
+приоритета вместе со скрытыми резервами айсбергов, спящие стопы и нетто-позиции счетов (для
+лимитов позиции; счета отсортированы по `AccountId`). Формат — `magic "CLBS"` + версия (`3`),
+varint-поля, единый кадр с CRC32 в конце. `RiskConfig` в снимок не пишется — приложение задаёт
+его при `open_with_risk` (на реплее нужен тот же конфиг); открытый объём по счетам не хранится —
+он восстанавливается перезаливкой стоящих заявок.
 
 Восстановление со снимком (`PersistentClob::open`):
 
@@ -423,9 +452,12 @@ open(journal, snapshot):
 | --- | --- |
 | [src/types.rs](../src/types.rs) | примитивы: `OrderId`, `AccountId`, `Price`, `Qty`, `Side`, `OrderType`, `TimeInForce`, `StpMode` |
 | [src/order.rs](../src/order.rs) | входной API: `Command`, `NewOrder` (вкл. `owner` / `stp`), `CancelOrder`, `ModifyOrder` |
-| [src/gateway.rs](../src/gateway.rs) | стадия Gateway |
+| [src/gateway.rs](../src/gateway.rs) | стадия Gateway; pre-trade risk поверх `RiskConfig` |
+| [src/risk.rs](../src/risk.rs) | `RiskConfig` — параметры pre-trade risk (тик/лот, ценовой коридор, лимит позиции) |
 | [src/sequencer.rs](../src/sequencer.rs) | стадия Sequencer |
-| [src/book.rs](../src/book.rs) | ордербук, алгоритм сведения и self-trade prevention |
+| [src/book/mod.rs](../src/book/mod.rs) | ордербук: уровни, слаб-индекс, резервы, индекс счетов |
+| [src/book/matching.rs](../src/book/matching.rs) | алгоритм сведения и self-trade prevention (`match_against` / `detach`) |
+| [src/book/accounts.rs](../src/book/accounts.rs) | `AccountBook` — нетто-позиция (`i128`) и открытый объём по счёту |
 | [src/slab.rs](../src/slab.rs) | слаб-арена узлов и интрузивный FIFO-список уровня (`Slab` / `PriceLevel`) |
 | [src/engine.rs](../src/engine.rs) | стадия Matching Engine |
 | [src/stops.rs](../src/stops.rs) | книга стоп-заявок (триггеры, каскадная активация) |

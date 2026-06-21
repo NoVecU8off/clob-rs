@@ -10,6 +10,7 @@ mod marketdata;
 mod order;
 mod output;
 mod persist;
+mod risk;
 mod sequencer;
 mod slab;
 mod snapshot;
@@ -30,6 +31,7 @@ pub use marketdata::{L2Feed, L2Level, L2Snapshot, L2Update, L3Order, L3Snapshot}
 pub use order::{CancelOrder, Command, ModifyOrder, NewOrder};
 pub use output::Event;
 pub use persist::PersistentClob;
+pub use risk::RiskConfig;
 pub use sequencer::Sequencer;
 pub use tape::{TapeTrade, TradeTape};
 pub use types::{

@@ -5,6 +5,7 @@ use crate::clob::Clob;
 use crate::journal::JournalError;
 use crate::order::Command;
 use crate::output::Event;
+use crate::risk::RiskConfig;
 use crate::snapshot;
 use crate::wal::{Journal, read_segment};
 
@@ -17,6 +18,10 @@ pub struct PersistentClob {
 
 impl PersistentClob {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, JournalError> {
+        Self::open_with_risk(path, RiskConfig::default())
+    }
+
+    pub fn open_with_risk<P: AsRef<Path>>(path: P, risk: RiskConfig) -> Result<Self, JournalError> {
         let path = path.as_ref();
         let snapshot_path = snapshot_path(path);
         let (mut clob, applied) = match snapshot::read(&snapshot_path)? {
@@ -26,6 +31,7 @@ impl PersistentClob {
             }
             None => (Clob::new(), 0),
         };
+        clob.set_risk(risk);
         let (base_seq, commands) = read_segment(path)?;
         let mut scratch = Vec::new();
         for (offset, command) in commands.into_iter().enumerate() {

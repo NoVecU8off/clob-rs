@@ -5,4 +5,8 @@ pub enum RejectReason {
     UnknownOrder,
     InsufficientLiquidity,
     WouldCross,
+    TickSize,
+    LotSize,
+    PriceBand,
+    PositionLimit,
 }

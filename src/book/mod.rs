@@ -1,7 +1,12 @@
+mod accounts;
+mod matching;
+
 use std::collections::{BTreeMap, HashMap};
 
 use crate::slab::{Node, PriceLevel, Slab};
-use crate::types::{AccountId, OrderId, Price, Qty, SeqNum, Side, StpMode, Timestamp};
+use crate::types::{AccountId, OrderId, Price, Qty, SeqNum, Side, Timestamp};
+
+use accounts::AccountBook;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RestingOrder {
@@ -41,6 +46,7 @@ pub struct OrderBook {
     slab: Slab,
     index: HashMap<OrderId, Location>,
     reserves: HashMap<OrderId, Reserve>,
+    accounts: AccountBook,
 }
 
 impl OrderBook {
@@ -63,6 +69,13 @@ impl OrderBook {
         }
     }
 
+    pub fn mid(&self) -> Option<Price> {
+        match (self.best_bid(), self.best_ask()) {
+            (Some(bid), Some(ask)) => Some(((bid as u128 + ask as u128) / 2) as Price),
+            _ => None,
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.index.is_empty()
     }
@@ -73,6 +86,22 @@ impl OrderBook {
 
     pub fn contains(&self, order_id: OrderId) -> bool {
         self.index.contains_key(&order_id)
+    }
+
+    pub(crate) fn account_net(&self, owner: AccountId) -> i128 {
+        self.accounts.net(owner)
+    }
+
+    pub(crate) fn account_open(&self, owner: AccountId, side: Side) -> Qty {
+        self.accounts.open(owner, side)
+    }
+
+    pub(crate) fn account_nets(&self) -> Vec<(AccountId, i128)> {
+        self.accounts.nets_sorted()
+    }
+
+    pub(crate) fn restore_account_net(&mut self, owner: AccountId, net: i128) {
+        self.accounts.restore_net(owner, net);
     }
 
     pub fn depth(&self, side: Side, levels: usize) -> Vec<(Price, Qty)> {
@@ -167,9 +196,13 @@ impl OrderBook {
         let level = book.entry(order.price).or_default();
         level.total_qty += order.qty;
         level.link_back(&mut self.slab, slot);
+        self.accounts.add_open(order.owner, side, order.qty);
     }
 
     pub fn add_reserve(&mut self, order_id: OrderId, display: Qty, hidden: Qty) {
+        if let Some((side, order)) = self.get(order_id) {
+            self.accounts.add_open(order.owner, side, hidden);
+        }
         self.reserves.insert(order_id, Reserve { display, hidden });
     }
 
@@ -206,7 +239,9 @@ impl OrderBook {
             book.remove(&order.price);
         }
         self.slab.dealloc(location.slot);
-        self.reserves.remove(&order_id);
+        let hidden = self.reserves.remove(&order_id).map_or(0, |r| r.hidden);
+        self.accounts
+            .sub_open(order.owner, location.side, order.qty + hidden);
         Some(order)
     }
 
@@ -233,160 +268,7 @@ impl OrderBook {
         if let Some(level) = book.get_mut(&price) {
             level.total_qty -= delta;
         }
+        self.accounts.sub_open(updated.owner, location.side, delta);
         Some(updated)
-    }
-
-    pub fn match_against<F>(
-        &mut self,
-        taker_side: Side,
-        taker_owner: AccountId,
-        taker_stp: StpMode,
-        limit_price: Option<Price>,
-        mut qty: Qty,
-        mut on_trade: F,
-    ) -> MatchOutcome
-    where
-        F: FnMut(&RestingOrder, Qty, Price),
-    {
-        let mut taker_canceled = false;
-        let mut self_canceled = Vec::new();
-        while qty > 0 {
-            let book = match taker_side {
-                Side::Buy => &mut self.asks,
-                Side::Sell => &mut self.bids,
-            };
-            let best_price = match taker_side {
-                Side::Buy => book.keys().next().copied(),
-                Side::Sell => book.keys().next_back().copied(),
-            };
-            let Some(best_price) = best_price else {
-                break;
-            };
-
-            let crosses = match (taker_side, limit_price) {
-                (_, None) => true,
-                (Side::Buy, Some(limit)) => limit >= best_price,
-                (Side::Sell, Some(limit)) => limit <= best_price,
-            };
-            if !crosses {
-                break;
-            }
-
-            let level = book.get_mut(&best_price).expect("price level must exist");
-            let mut stop = false;
-            while qty > 0 {
-                let Some(slot) = level.head else {
-                    break;
-                };
-                if taker_stp != StpMode::Off
-                    && taker_owner != 0
-                    && self.slab.nodes[slot as usize].order.owner == taker_owner
-                {
-                    match taker_stp {
-                        StpMode::CancelMaker => {
-                            let id = Self::detach(
-                                &mut self.slab,
-                                &mut self.index,
-                                &mut self.reserves,
-                                level,
-                                slot,
-                            );
-                            self_canceled.push(id);
-                            continue;
-                        }
-                        StpMode::CancelBoth => {
-                            let id = Self::detach(
-                                &mut self.slab,
-                                &mut self.index,
-                                &mut self.reserves,
-                                level,
-                                slot,
-                            );
-                            self_canceled.push(id);
-                            taker_canceled = true;
-                            stop = true;
-                            break;
-                        }
-                        StpMode::CancelTaker => {
-                            taker_canceled = true;
-                            stop = true;
-                            break;
-                        }
-                        StpMode::Off => {}
-                    }
-                }
-                let (traded, fill, filled) = {
-                    let node = &mut self.slab.nodes[slot as usize];
-                    let traded = qty.min(node.order.qty);
-                    node.order.qty -= traded;
-                    let fill = RestingOrder {
-                        qty: traded,
-                        ..node.order
-                    };
-                    (traded, fill, node.order.qty == 0)
-                };
-                qty -= traded;
-                level.total_qty -= traded;
-                on_trade(&fill, traded, best_price);
-                if filled {
-                    let refill = if self.reserves.is_empty() {
-                        None
-                    } else if let Some(reserve) = self.reserves.get_mut(&fill.id) {
-                        let peak = reserve.display.min(reserve.hidden);
-                        reserve.hidden -= peak;
-                        if reserve.hidden == 0 {
-                            self.reserves.remove(&fill.id);
-                        }
-                        Some(peak)
-                    } else {
-                        None
-                    };
-                    match refill {
-                        Some(peak) => {
-                            self.slab.nodes[slot as usize].order.qty = peak;
-                            level.total_qty += peak;
-                            level.unlink(&mut self.slab, slot);
-                            level.link_back(&mut self.slab, slot);
-                        }
-                        None => {
-                            self.index.remove(&fill.id);
-                            level.unlink(&mut self.slab, slot);
-                            self.slab.dealloc(slot);
-                        }
-                    }
-                }
-            }
-
-            if level.head.is_none() {
-                book.remove(&best_price);
-            }
-            if stop {
-                break;
-            }
-        }
-        MatchOutcome {
-            remaining: qty,
-            taker_canceled,
-            self_canceled,
-        }
-    }
-
-    fn detach(
-        slab: &mut Slab,
-        index: &mut HashMap<OrderId, Location>,
-        reserves: &mut HashMap<OrderId, Reserve>,
-        level: &mut PriceLevel,
-        slot: u32,
-    ) -> OrderId {
-        let (id, qty) = {
-            let order = &slab.nodes[slot as usize].order;
-            (order.id, order.qty)
-        };
-        level.total_qty -= qty;
-        level.unlink(slab, slot);
-        index.remove(&id);
-        reserves.remove(&id);
-        slab.dealloc(slot);
-        id
     }
 }

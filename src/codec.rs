@@ -44,6 +44,18 @@ impl Writer {
         }
     }
 
+    pub fn varint128(&mut self, mut v: u128) {
+        loop {
+            let byte = (v & 0x7f) as u8;
+            v >>= 7;
+            if v == 0 {
+                self.buf.push(byte);
+                return;
+            }
+            self.buf.push(byte | 0x80);
+        }
+    }
+
     pub fn bytes(&mut self, b: &[u8]) {
         self.buf.extend_from_slice(b);
     }
@@ -107,6 +119,22 @@ impl<'a> Reader<'a> {
                 return Err(CodecError::Overflow);
             }
             result |= ((byte & 0x7f) as u64) << shift;
+            if byte & 0x80 == 0 {
+                return Ok(result);
+            }
+            shift += 7;
+        }
+    }
+
+    pub fn varint128(&mut self) -> Result<u128, CodecError> {
+        let mut result = 0u128;
+        let mut shift = 0u32;
+        loop {
+            let byte = self.u8()?;
+            if shift >= 128 {
+                return Err(CodecError::Overflow);
+            }
+            result |= ((byte & 0x7f) as u128) << shift;
             if byte & 0x80 == 0 {
                 return Ok(result);
             }

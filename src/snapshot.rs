@@ -7,10 +7,10 @@ use crate::clob::Clob;
 use crate::codec::{Reader, Writer, crc32};
 use crate::journal::{JournalError, decode_stp, decode_tif, stp_code, tif_code};
 use crate::stops::PendingStop;
-use crate::types::{OrderId, OrderType, Price, SeqNum, Side};
+use crate::types::{AccountId, OrderId, OrderType, Price, SeqNum, Side};
 
 const SNAP_MAGIC: [u8; 4] = *b"CLBS";
-const SNAP_VERSION: u16 = 2;
+const SNAP_VERSION: u16 = 3;
 const MIN_LEN: usize = 4 + 2 + 4;
 
 pub(crate) struct SnapshotState {
@@ -19,6 +19,7 @@ pub(crate) struct SnapshotState {
     pub(crate) last_trade_price: Option<Price>,
     pub(crate) orders: Vec<RestingEntry>,
     pub(crate) stops: Vec<PendingStop>,
+    pub(crate) account_net: Vec<(AccountId, i128)>,
 }
 
 pub(crate) fn write(path: &Path, clob: &Clob) -> Result<(), JournalError> {
@@ -88,6 +89,11 @@ fn encode(state: &SnapshotState) -> Vec<u8> {
         w.u8(tif_code(stop.tif));
         w.varint(stop.owner);
         w.u8(stp_code(stop.stp));
+    }
+    w.varint(state.account_net.len() as u64);
+    for (owner, net) in &state.account_net {
+        w.varint(*owner);
+        w.varint128(zigzag(*net));
     }
     let crc = crc32(w.as_slice());
     w.u32(crc);
@@ -166,13 +172,29 @@ fn decode(data: &[u8]) -> Result<SnapshotState, JournalError> {
             stp,
         });
     }
+    let account_count = r.varint()?;
+    let mut account_net = Vec::with_capacity(account_count as usize);
+    for _ in 0..account_count {
+        let owner = r.varint()?;
+        let net = unzigzag(r.varint128()?);
+        account_net.push((owner, net));
+    }
     Ok(SnapshotState {
         seq,
         next_order_id,
         last_trade_price,
         orders,
         stops,
+        account_net,
     })
+}
+
+fn zigzag(n: i128) -> u128 {
+    ((n << 1) ^ (n >> 127)) as u128
+}
+
+fn unzigzag(z: u128) -> i128 {
+    (z >> 1) as i128 ^ -((z & 1) as i128)
 }
 
 fn side_code(side: Side) -> u8 {

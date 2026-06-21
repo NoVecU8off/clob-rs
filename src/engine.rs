@@ -73,6 +73,10 @@ impl MatchingEngine {
         self.stops.park(stop);
     }
 
+    pub(crate) fn restore_account_net(&mut self, owner: AccountId, net: i128) {
+        self.book.restore_account_net(owner, net);
+    }
+
     pub(crate) fn execute_new(
         &mut self,
         seq: SeqNum,
