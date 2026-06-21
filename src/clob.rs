@@ -1,5 +1,6 @@
 use crate::book::OrderBook;
 use crate::engine::MatchingEngine;
+use crate::fees::FeeConfig;
 use crate::gateway::{Gateway, RiskContext};
 use crate::order::Command;
 use crate::output::Event;
@@ -24,6 +25,21 @@ impl Clob {
             gateway: Gateway::with_config(risk),
             ..Default::default()
         }
+    }
+
+    pub fn with_fees(fees: FeeConfig) -> Self {
+        let mut clob = Clob::default();
+        clob.engine.set_fees(fees);
+        clob
+    }
+
+    pub fn with_risk_and_fees(risk: RiskConfig, fees: FeeConfig) -> Self {
+        let mut clob = Clob {
+            gateway: Gateway::with_config(risk),
+            ..Default::default()
+        };
+        clob.engine.set_fees(fees);
+        clob
     }
 
     pub fn submit(&mut self, command: Command) -> Vec<Event> {
@@ -106,6 +122,10 @@ impl Clob {
 
     pub(crate) fn set_risk(&mut self, risk: RiskConfig) {
         self.gateway = Gateway::with_config(risk);
+    }
+
+    pub(crate) fn set_fees(&mut self, fees: FeeConfig) {
+        self.engine.set_fees(fees);
     }
 
     pub(crate) fn capture(&self) -> SnapshotState {

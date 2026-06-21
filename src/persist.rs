@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::book::OrderBook;
 use crate::clob::Clob;
+use crate::fees::FeeConfig;
 use crate::journal::JournalError;
 use crate::order::Command;
 use crate::output::Event;
@@ -18,10 +19,30 @@ pub struct PersistentClob {
 
 impl PersistentClob {
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, JournalError> {
-        Self::open_with_risk(path, RiskConfig::default())
+        Self::open_configured(path, RiskConfig::default(), FeeConfig::default())
     }
 
     pub fn open_with_risk<P: AsRef<Path>>(path: P, risk: RiskConfig) -> Result<Self, JournalError> {
+        Self::open_configured(path, risk, FeeConfig::default())
+    }
+
+    pub fn open_with_fees<P: AsRef<Path>>(path: P, fees: FeeConfig) -> Result<Self, JournalError> {
+        Self::open_configured(path, RiskConfig::default(), fees)
+    }
+
+    pub fn open_with_risk_and_fees<P: AsRef<Path>>(
+        path: P,
+        risk: RiskConfig,
+        fees: FeeConfig,
+    ) -> Result<Self, JournalError> {
+        Self::open_configured(path, risk, fees)
+    }
+
+    fn open_configured<P: AsRef<Path>>(
+        path: P,
+        risk: RiskConfig,
+        fees: FeeConfig,
+    ) -> Result<Self, JournalError> {
         let path = path.as_ref();
         let snapshot_path = snapshot_path(path);
         let (mut clob, applied) = match snapshot::read(&snapshot_path)? {
@@ -32,6 +53,7 @@ impl PersistentClob {
             None => (Clob::new(), 0),
         };
         clob.set_risk(risk);
+        clob.set_fees(fees);
         let (base_seq, commands) = read_segment(path)?;
         let mut scratch = Vec::new();
         for (offset, command) in commands.into_iter().enumerate() {

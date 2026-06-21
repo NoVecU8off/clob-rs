@@ -1,5 +1,6 @@
 use crate::book::{OrderBook, RestingEntry, RestingOrder};
 use crate::error::RejectReason;
+use crate::fees::FeeConfig;
 use crate::order::{ModifyOrder, NewOrder};
 use crate::output::Event;
 use crate::stops::{PendingStop, StopBook};
@@ -25,6 +26,7 @@ pub struct MatchingEngine {
     book: OrderBook,
     stops: StopBook,
     last_trade_price: Option<Price>,
+    fees: FeeConfig,
 }
 
 impl MatchingEngine {
@@ -54,6 +56,10 @@ impl MatchingEngine {
 
     pub(crate) fn restore_last_trade_price(&mut self, price: Option<Price>) {
         self.last_trade_price = price;
+    }
+
+    pub(crate) fn set_fees(&mut self, fees: FeeConfig) {
+        self.fees = fees;
     }
 
     pub(crate) fn restore_order(
@@ -251,6 +257,7 @@ impl MatchingEngine {
         } = live;
 
         let mut last_px = None;
+        let fees = self.fees;
         let outcome = self.book.match_against(
             side,
             owner,
@@ -265,6 +272,8 @@ impl MatchingEngine {
                     price,
                     qty: traded,
                     taker_side: side,
+                    taker_fee: fees.taker_fee(price, traded),
+                    maker_fee: fees.maker_fee(price, traded),
                 });
                 last_px = Some(price);
             },

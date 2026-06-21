@@ -18,6 +18,8 @@ pub enum Event {
         price: Price,
         qty: Qty,
         taker_side: Side,
+        taker_fee: i64,
+        maker_fee: i64,
     },
     Resting {
         seq: SeqNum,

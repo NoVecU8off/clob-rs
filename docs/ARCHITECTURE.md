@@ -131,6 +131,20 @@ Iceberg-заявки (`Iceberg { display }`) встают в книгу как �
 проекции market data не выдаёт. Сработавший стоп несёт свои `owner` / `stp` и на активации подчиняется
 STP как обычный агрессор. STP проверяется на `New`; `Modify` (amend) пере-сводится без STP.
 
+**Комиссии (maker/taker).** При сконфигурированном `FeeConfig` ([src/fees.rs](../src/fees.rs);
+билдеры `with_maker_ppm` / `with_taker_ppm`; по умолчанию off) движок считает комиссию на **каждой
+сделке** в точке её рождения — колбэке `on_trade` внутри `settle`, где в области видимости оба
+участника (агрессор и встреченный мейкер). Ставки заданы в **ppm от нотионала** и **знаковые**
+(`i64`): `fee = price · qty · rate_ppm / 1_000_000` (промежуточно `i128` с насыщением, округление
+**усечением к нулю**); положительная ставка — комиссия в пользу биржи, **отрицательная ставка
+мейкера — ребейт** (отрицательный `maker_fee`). Результат выводится двумя полями `Event::Trade`
+(`taker_fee` / `maker_fee`); облагается весь исполненный объём, включая скрытый резерв айсберга
+(принт на каждый сведённый слой). По принципу «события на выходе, не состояние внутри» ядро комиссии
+**не накапливает** (суммирование — слой клиринга, вне области ядра): снимок не меняется, журнал не
+затронут, `FeeConfig` не персистится (как и `RiskConfig` — приложение задаёт его при открытии).
+Подключается через `Clob::with_fees` / `with_risk_and_fees` и `PersistentClob::open_with_fees` /
+`open_with_risk_and_fees`.
+
 ### Output — [src/output.rs](../src/output.rs)
 
 Единый перечень событий `Event`:
@@ -138,7 +152,7 @@ STP как обычный агрессор. STP проверяется на `New
 | Событие | Когда |
 | --- | --- |
 | `Accepted` | заявка принята движком |
-| `Trade` | состоялась сделка (тейкер ↔ мейкер, цена, объём) |
+| `Trade` | состоялась сделка (тейкер ↔ мейкер, цена, объём; `taker_fee` / `maker_fee` — комиссии, знаковые `i64`) |
 | `Resting` | остаток встал в книгу |
 | `Filled` | заявка исполнена полностью |
 | `Canceled` | заявка/остаток снят |
@@ -454,6 +468,7 @@ open(journal, snapshot):
 | [src/order.rs](../src/order.rs) | входной API: `Command`, `NewOrder` (вкл. `owner` / `stp`), `CancelOrder`, `ModifyOrder` |
 | [src/gateway.rs](../src/gateway.rs) | стадия Gateway; pre-trade risk поверх `RiskConfig` |
 | [src/risk.rs](../src/risk.rs) | `RiskConfig` — параметры pre-trade risk (тик/лот, ценовой коридор, лимит позиции) |
+| [src/fees.rs](../src/fees.rs) | `FeeConfig` — ставки комиссий maker/taker (ppm от нотионала, знаковые) и расчёт комиссии сделки |
 | [src/sequencer.rs](../src/sequencer.rs) | стадия Sequencer |
 | [src/book/mod.rs](../src/book/mod.rs) | ордербук: уровни, слаб-индекс, резервы, индекс счетов |
 | [src/book/matching.rs](../src/book/matching.rs) | алгоритм сведения и self-trade prevention (`match_against` / `detach`) |
