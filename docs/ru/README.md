@@ -9,4 +9,4 @@
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Архитектура: конвейер, стадии, структуры данных, алгоритм матчинга, детерминизм |
 | [ROADMAP.md](ROADMAP.md) | Что предстоит сделать — по этапам |
 
-Быстрый старт — примеры в [../examples/](../examples/) (`basic.rs`, `throughput.rs`).
+Быстрый старт — примеры в [../../examples/](../../examples/) (`basic.rs`, `throughput.rs`).

@@ -14,7 +14,7 @@
                     нормализация    seq и order_id    price-time матчинг    Trade / Resting / ...
 ```
 
-Связывает стадии тип [`Clob`](../src/clob.rs). Публичный API минимален:
+Связывает стадии тип [`Clob`](../../src/clob.rs). Публичный API минимален:
 
 ```rust
 let mut clob = Clob::new();
@@ -29,12 +29,12 @@ let events: Vec<Event> = clob.submit(Command::New(NewOrder::limit(Side::Buy, 101
 2. **Целочисленная математика.** Цены — в тиках, количества — в лотах (`u64`).
    Никаких `f64`: денежные расчёты должны быть точными и повторяемыми.
 3. **События на выходе, а не мутации на входе.** Движок не отдаёт наружу изменяемое
-   состояние — он возвращает поток событий, естественный для клиринга, market data и журнала.
-4. **Параллелизм — через шардирование по инструментам**, а не через потоки внутри одной книги.
+   состояние — он возвращает поток событий, естественный для market data и журнала.
+4. **Без параллелизма внутри одной книги** — потоки внутри книги разрушили бы детерминизм.
 
 ## Стадии конвейера
 
-### Gateway — [src/gateway.rs](../src/gateway.rs)
+### Gateway — [src/gateway.rs](../../src/gateway.rs)
 
 Первый барьер. Проверяет корректность команды до того, как она дойдёт до движка:
 
@@ -44,7 +44,7 @@ let events: Vec<Event> = clob.submit(Command::New(NewOrder::limit(Side::Buy, 101
 - `Modify` с `qty == 0` или `price == 0` отклоняется по тем же правилам;
 - отмена проходит всегда (существование заявки проверяет движок).
 
-**Pre-trade risk (opt-in).** При сконфигурированном `RiskConfig` ([src/risk.rs](../src/risk.rs);
+**Pre-trade risk (opt-in).** При сконфигурированном `RiskConfig` ([src/risk.rs](../../src/risk.rs);
 подключается через `Clob::with_risk` / `PersistentClob::open_with_risk`, дефолт — off, поведение
 не меняется) Gateway дополнительно проверяет:
 
@@ -60,13 +60,13 @@ let events: Vec<Event> = clob.submit(Command::New(NewOrder::limit(Side::Buy, 101
 Причины отказа — `TickSize`, `LotSize`, `PriceBand`, `PositionLimit`. Конфиг статичен и неизменяем,
 поэтому детерминизм сохранён; пер-счётные нетто-позицию и открытый объём ведёт книга (см. ниже).
 
-### Sequencer — [src/sequencer.rs](../src/sequencer.rs)
+### Sequencer — [src/sequencer.rs](../../src/sequencer.rs)
 
 Присваивает каждому событию монотонный `seq`, а каждой новой заявке — уникальный
 `order_id` (начиная с 1). Это сердце детерминизма: порядок фиксируется здесь и далее
 не меняется. `seq` используется и как логическая метка времени.
 
-### Matching Engine — [src/engine.rs](../src/engine.rs)
+### Matching Engine — [src/engine.rs](../../src/engine.rs)
 
 Применяет провалидированную и пронумерованную команду к ордербуку и порождает события.
 Отвечает за семантику типов заявок и time-in-force:
@@ -95,7 +95,7 @@ let events: Vec<Event> = clob.submit(Command::New(NewOrder::limit(Side::Buy, 101
 после amend остаётся нескрещённой.
 
 Стоп-заявки (`Stop` / `StopLimit`) не попадают в основную книгу сразу: движок «паркует»
-их в отдельной книге стопов ([src/stops.rs](../src/stops.rs)) и эмитит `Accepted`. Триггер
+их в отдельной книге стопов ([src/stops.rs](../../src/stops.rs)) и эмитит `Accepted`. Триггер
 привязан к **цене последней сделки**: buy-stop активируется при `last >= trigger`, sell-stop —
 при `last <= trigger`. После любой команды, породившей сделку (а также сразу после приёма
 стопа), движок прогоняет сработавшие стопы: по каждому — `Triggered`, затем обычное сведение
@@ -127,11 +127,11 @@ Iceberg-заявки (`Iceberg { display }`) встают в книгу как �
 `CancelMaker` снимает встреченный стоящий ордер (`Canceled`) и агрессор продолжает обход очереди;
 `CancelBoth` снимает оба. Решение точечно — чужая ликвидность на пути сводится нормально, поэтому STP
 не сбивает price-time priority для прочих участников. `owner` — **непрозрачный токен равенства**: ядро
-его только сравнивает (аутентификация — слой выше), хранит инлайном на `RestingOrder` и в публичные
+его только сравнивает, хранит инлайном на `RestingOrder` и в публичные
 проекции market data не выдаёт. Сработавший стоп несёт свои `owner` / `stp` и на активации подчиняется
 STP как обычный агрессор. STP проверяется на `New`; `Modify` (amend) пере-сводится без STP.
 
-**Комиссии (maker/taker).** При сконфигурированном `FeeConfig` ([src/fees.rs](../src/fees.rs);
+**Комиссии (maker/taker).** При сконфигурированном `FeeConfig` ([src/fees.rs](../../src/fees.rs);
 билдеры `with_maker_ppm` / `with_taker_ppm`; по умолчанию off) движок считает комиссию на **каждой
 сделке** в точке её рождения — колбэке `on_trade` внутри `settle`, где в области видимости оба
 участника (агрессор и встреченный мейкер). Ставки заданы в **ppm от нотионала** и **знаковые**
@@ -140,12 +140,12 @@ STP как обычный агрессор. STP проверяется на `New
 мейкера — ребейт** (отрицательный `maker_fee`). Результат выводится двумя полями `Event::Trade`
 (`taker_fee` / `maker_fee`); облагается весь исполненный объём, включая скрытый резерв айсберга
 (принт на каждый сведённый слой). По принципу «события на выходе, не состояние внутри» ядро комиссии
-**не накапливает** (суммирование — слой клиринга, вне области ядра): снимок не меняется, журнал не
+**не накапливает**: снимок не меняется, журнал не
 затронут, `FeeConfig` не персистится (как и `RiskConfig` — приложение задаёт его при открытии).
 Подключается через `Clob::with_fees` / `with_risk_and_fees` и `PersistentClob::open_with_fees` /
 `open_with_risk_and_fees`.
 
-### Output — [src/output.rs](../src/output.rs)
+### Output — [src/output.rs](../../src/output.rs)
 
 Единый перечень событий `Event`:
 
@@ -160,7 +160,7 @@ STP как обычный агрессор. STP проверяется на `New
 | `Triggered` | стоп-заявка сработала; далее идут события исхода |
 | `Rejected` | отказ (gateway, нехватка ликвидности для FOK или пересечение спреда для post-only) |
 
-## Структура ордербука — [src/book/](../src/book/)
+## Структура ордербука — [src/book/](../../src/book/)
 
 Модуль — каталог `src/book/`: `mod.rs` (структура и операции книги, индексы), `matching.rs`
 (`match_against` / `detach` — алгоритм сведения и self-trade prevention), `accounts.rs`
@@ -194,14 +194,14 @@ STP как обычный агрессор. STP проверяется на `New
 - Узлы заявок живут в общей арене (`slab`) со списком свободных слотов —
   аллокации переиспользуются, без выделения памяти на заявку в установившемся режиме.
   Слаб, узлы и `PriceLevel` (интрузивный список и его операции `link_back` / `unlink`)
-  вынесены в [src/slab.rs](../src/slab.rs). `RestingOrder` дополнительно несёт `owner`
+  вынесены в [src/slab.rs](../../src/slab.rs). `RestingOrder` дополнительно несёт `owner`
   (для STP) — в глубину и публичные проекции он не входит.
 - `index` сопоставляет `OrderId → (сторона, слот)`, поэтому отмена отцепляет узел
   из списка за `O(1)`, без обхода уровня.
 - `reserves` держит скрытые части iceberg-заявок (`OrderId → {display, hidden}`):
   видимый peak — обычный узел в слабе и в `total_qty` уровня, а резерв лежит отдельно
   и в глубину не входит. Запись появляется только у айсбергов с непустым резервом.
-- `accounts` ([src/book/accounts.rs](../src/book/accounts.rs)) ведёт пер-счётные агрегаты для
+- `accounts` ([src/book/accounts.rs](../../src/book/accounts.rs)) ведёт пер-счётные агрегаты для
   pre-trade risk: нетто-позицию (`i128`, знаковую) и открытый объём по сторонам (полный остаток,
   вкл. скрытый резерв айсберга). Обновляется на `insert` / `cancel` / `reduce` / сведении /
   STP-`detach` — книга единственный мутатор стоящего объёма и видит обоих участников каждой
@@ -280,7 +280,7 @@ price-time. Полностью исполненный мейкер тут же �
 Итог книги: bid `101 ×2`, bid `100 ×7`, ask `102 ×5`, спред `1`.
 (Ровно этот сценарий печатает `examples/basic.rs`.)
 
-## Market data — снимки, инкрементальные обновления и лента сделок — [src/marketdata.rs](../src/marketdata.rs)
+## Market data — снимки, инкрементальные обновления и лента сделок — [src/marketdata.rs](../../src/marketdata.rs)
 
 Market data — это **read-проекция** книги для внешних наблюдателей, отдельная от приватного
 потока событий: движок книгу пишет, market data её только читает. Реализована как два метода
@@ -324,7 +324,7 @@ L3 по цене: `sum(L3 qty по уровню) == L2 qty` (инвариант 
 
 Фид со-локален с движком (читает книгу).
 
-### Инкрементальные L3-обновления (market-by-order) — `L3Update` / `L3Feed` — [src/l3feed.rs](../src/l3feed.rs)
+### Инкрементальные L3-обновления (market-by-order) — `L3Update` / `L3Feed` — [src/l3feed.rs](../../src/l3feed.rs)
 
 L2-дельта агрегирует уровень в одно число; L3-дельта работает на гранулярности **отдельной заявки** и
 несёт **позицию в очереди**. `L3Feed::apply(&events, book)` отдаёт `L3Update { seq, deltas }`, где
@@ -352,7 +352,7 @@ FIFO-порядок, итерация внутренних `HashMap` (`id → у
 ### Сквозная нумерация data-каналов
 
 Все каналы market data якорятся на `seq` команды через единый `command_seq(&events)` (один источник
-истины в [src/marketdata.rs](../src/marketdata.rs)): события одной команды несут общий `seq`
+истины в [src/marketdata.rs](../../src/marketdata.rs)): события одной команды несут общий `seq`
 секвенсора, и каждый канал тегирует им свой кадр. Снимки `l2_snapshot` / `l3_snapshot` несут
 `Clob::current_seq()` (значение после команды), инкременты `L2Update` / `L3Update` и принты `TapeTrade` —
 тот же `seq` команды. Для одной команды все каналы несут **один** `seq`, поэтому потребитель: (1) берёт
@@ -360,7 +360,7 @@ FIFO-порядок, итерация внутренних `HashMap` (`id → у
 общему якорю. Это контракт между каналами, а не совпадение: `current_seq()` после команды равен `seq` её
 событий, а значит и `seq` всех её кадров.
 
-### Лента сделок (trade tape) — `TradeTape` / `TapeTrade` — [src/tape.rs](../src/tape.rs)
+### Лента сделок (trade tape) — `TradeTape` / `TapeTrade` — [src/tape.rs](../../src/tape.rs)
 
 Снимки и L2-дельты описывают **состояние книги**; лента сделок — это отдельный канал **потока
 исполнений**. `TradeTape::apply(&events)` извлекает из событий одной команды по одному обезличенному
@@ -386,12 +386,10 @@ FIFO-порядок, итерация внутренних `HashMap` (`id → у
 
 ## Где параллелизм
 
-Внутри одной книги — никогда: это разрушило бы детерминизм. Масштабирование —
-горизонтальное, шардированием по инструментам: на каждый инструмент свой
-однопоточный `Clob`, а распределение и сетевой приём — слой выше, в отдельном крейте
-над ядром (`clob-server`; см. раздел «Вне ядра — отдельный крейт» в [ROADMAP.md](ROADMAP.md)).
+Внутри одной книги параллелизма нет — он разрушил бы детерминизм. `Clob` обрабатывает
+книгу строго в одном потоке.
 
-## Персистентность, снимки и реплей — [src/persist.rs](../src/persist.rs)
+## Персистентность, снимки и реплей — [src/persist.rs](../../src/persist.rs)
 
 Надстройка над детерминированным ядром (v0.3). `PersistentClob` оборачивает `Clob`
 и ведёт **write-ahead журнал** входных команд: команда сериализуется и сбрасывается на диск
@@ -410,14 +408,14 @@ FIFO-порядок, итерация внутренних `HashMap` (`id → у
 запись  = [ tag u8 | (для New) флаги side|type|tif | поля varint по типу ]
 ```
 
-Числовые поля — LEB128-varint ([src/codec.rs](../src/codec.rs)); тот же кодек переиспользуется
+Числовые поля — LEB128-varint ([src/codec.rs](../../src/codec.rs)); тот же кодек переиспользуется
 снимками. Кодирование/декодирование `Command` и заголовок — в
-[src/journal.rs](../src/journal.rs); запись с групповым коммитом (`Journal`) и чтение
-(`read_commands` / `read_segment`) — в [src/wal.rs](../src/wal.rs). При восстановлении читатель
+[src/journal.rs](../../src/journal.rs); запись с групповым коммитом (`Journal`) и чтение
+(`read_commands` / `read_segment`) — в [src/wal.rs](../../src/wal.rs). При восстановлении читатель
 проверяет `magic`/версию и CRC каждого блока; прерванная на полузаписи последняя запись (CRC не
 сходится или блок неполон) отсекается — журнал восстанавливается до последней целой записи.
 
-### Снимки (checkpoint) — [src/snapshot.rs](../src/snapshot.rs)
+### Снимки (checkpoint) — [src/snapshot.rs](../../src/snapshot.rs)
 
 Чтобы восстановление не переигрывало весь журнал с нуля, `checkpoint()` сохраняет **снимок**
 полного детерминированного состояния и затем **ротирует** журнал, оставляя только хвост:
@@ -464,26 +462,26 @@ open(journal, snapshot):
 
 | Модуль | Содержимое |
 | --- | --- |
-| [src/types.rs](../src/types.rs) | примитивы: `OrderId`, `AccountId`, `Price`, `Qty`, `Side`, `OrderType`, `TimeInForce`, `StpMode` |
-| [src/order.rs](../src/order.rs) | входной API: `Command`, `NewOrder` (вкл. `owner` / `stp`), `CancelOrder`, `ModifyOrder` |
-| [src/gateway.rs](../src/gateway.rs) | стадия Gateway; pre-trade risk поверх `RiskConfig` |
-| [src/risk.rs](../src/risk.rs) | `RiskConfig` — параметры pre-trade risk (тик/лот, ценовой коридор, лимит позиции) |
-| [src/fees.rs](../src/fees.rs) | `FeeConfig` — ставки комиссий maker/taker (ppm от нотионала, знаковые) и расчёт комиссии сделки |
-| [src/sequencer.rs](../src/sequencer.rs) | стадия Sequencer |
-| [src/book/mod.rs](../src/book/mod.rs) | ордербук: уровни, слаб-индекс, резервы, индекс счетов |
-| [src/book/matching.rs](../src/book/matching.rs) | алгоритм сведения и self-trade prevention (`match_against` / `detach`) |
-| [src/book/accounts.rs](../src/book/accounts.rs) | `AccountBook` — нетто-позиция (`i128`) и открытый объём по счёту |
-| [src/slab.rs](../src/slab.rs) | слаб-арена узлов и интрузивный FIFO-список уровня (`Slab` / `PriceLevel`) |
-| [src/engine.rs](../src/engine.rs) | стадия Matching Engine |
-| [src/stops.rs](../src/stops.rs) | книга стоп-заявок (триггеры, каскадная активация) |
-| [src/output.rs](../src/output.rs) | модель событий |
-| [src/marketdata.rs](../src/marketdata.rs) | проекции market data: снимки книги L2 / L3, инкрементальные L2-дельты (`L2Feed`), общий якорь каналов (`command_seq`) |
-| [src/l3feed.rs](../src/l3feed.rs) | инкрементальный market-by-order: `L3Feed` / `L3Update` / `L3Delta` — пер-заявочные дельты с позицией в очереди |
-| [src/tape.rs](../src/tape.rs) | лента сделок: `TradeTape` / `TapeTrade` — book-free поток принтов поверх событий |
-| [src/error.rs](../src/error.rs) | причины отказа |
-| [src/clob.rs](../src/clob.rs) | связка конвейера, публичный `Clob` |
-| [src/codec.rs](../src/codec.rs) | низкоуровневый кодек: varint/LE-примитивы, CRC32 |
-| [src/journal.rs](../src/journal.rs) | формат журнала: заголовок (magic+версия), сериализация `Command` |
-| [src/wal.rs](../src/wal.rs) | WAL-хранилище: `Journal` (запись + `fsync` + ротация), `read_segment` / `read_commands` (чтение) |
-| [src/snapshot.rs](../src/snapshot.rs) | формат снимка состояния (`magic "CLBS"`): захват/восстановление `Clob`, атомарная запись |
-| [src/persist.rs](../src/persist.rs) | `PersistentClob` — обёртка над `Clob` с журналом, снимками и реплеем |
+| [src/types.rs](../../src/types.rs) | примитивы: `OrderId`, `AccountId`, `Price`, `Qty`, `Side`, `OrderType`, `TimeInForce`, `StpMode` |
+| [src/order.rs](../../src/order.rs) | входной API: `Command`, `NewOrder` (вкл. `owner` / `stp`), `CancelOrder`, `ModifyOrder` |
+| [src/gateway.rs](../../src/gateway.rs) | стадия Gateway; pre-trade risk поверх `RiskConfig` |
+| [src/risk.rs](../../src/risk.rs) | `RiskConfig` — параметры pre-trade risk (тик/лот, ценовой коридор, лимит позиции) |
+| [src/fees.rs](../../src/fees.rs) | `FeeConfig` — ставки комиссий maker/taker (ppm от нотионала, знаковые) и расчёт комиссии сделки |
+| [src/sequencer.rs](../../src/sequencer.rs) | стадия Sequencer |
+| [src/book/mod.rs](../../src/book/mod.rs) | ордербук: уровни, слаб-индекс, резервы, индекс счетов |
+| [src/book/matching.rs](../../src/book/matching.rs) | алгоритм сведения и self-trade prevention (`match_against` / `detach`) |
+| [src/book/accounts.rs](../../src/book/accounts.rs) | `AccountBook` — нетто-позиция (`i128`) и открытый объём по счёту |
+| [src/slab.rs](../../src/slab.rs) | слаб-арена узлов и интрузивный FIFO-список уровня (`Slab` / `PriceLevel`) |
+| [src/engine.rs](../../src/engine.rs) | стадия Matching Engine |
+| [src/stops.rs](../../src/stops.rs) | книга стоп-заявок (триггеры, каскадная активация) |
+| [src/output.rs](../../src/output.rs) | модель событий |
+| [src/marketdata.rs](../../src/marketdata.rs) | проекции market data: снимки книги L2 / L3, инкрементальные L2-дельты (`L2Feed`), общий якорь каналов (`command_seq`) |
+| [src/l3feed.rs](../../src/l3feed.rs) | инкрементальный market-by-order: `L3Feed` / `L3Update` / `L3Delta` — пер-заявочные дельты с позицией в очереди |
+| [src/tape.rs](../../src/tape.rs) | лента сделок: `TradeTape` / `TapeTrade` — book-free поток принтов поверх событий |
+| [src/error.rs](../../src/error.rs) | причины отказа |
+| [src/clob.rs](../../src/clob.rs) | связка конвейера, публичный `Clob` |
+| [src/codec.rs](../../src/codec.rs) | низкоуровневый кодек: varint/LE-примитивы, CRC32 |
+| [src/journal.rs](../../src/journal.rs) | формат журнала: заголовок (magic+версия), сериализация `Command` |
+| [src/wal.rs](../../src/wal.rs) | WAL-хранилище: `Journal` (запись + `fsync` + ротация), `read_segment` / `read_commands` (чтение) |
+| [src/snapshot.rs](../../src/snapshot.rs) | формат снимка состояния (`magic "CLBS"`): захват/восстановление `Clob`, атомарная запись |
+| [src/persist.rs](../../src/persist.rs) | `PersistentClob` — обёртка над `Clob` с журналом, снимками и реплеем |
